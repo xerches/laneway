@@ -1,13 +1,17 @@
 // Applies netlify/database/migrations/*.sql to the database in DATABASE_URL.
-// Use this for local development and for hosts other than Netlify.
-// On Netlify, the platform applies the same folder itself during deploys.
+// Runs locally (npm run db:migrate) and before every Vercel build
+// (npm run vercel-build). On Netlify, the platform applies the folder itself.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pg from "pg";
 
-const url = process.env.DATABASE_URL;
+// A direct (unpooled) connection is safer for schema changes when the host
+// offers one, as Neon does.
+const url = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 if (!url) {
-  console.error("DATABASE_URL is not set (put it in .env.local).");
+  console.error(
+    "DATABASE_URL is not set. Locally, put it in .env.local. On Vercel, connect a Neon database under Storage.",
+  );
   process.exit(1);
 }
 
@@ -16,6 +20,8 @@ const client = new pg.Client({ connectionString: url });
 await client.connect();
 
 try {
+  // Two builds can start at once (a preview and production); take turns.
+  await client.query("select pg_advisory_lock(727274)");
   await client.query(
     `create table if not exists _laneway_migrations (
        name text primary key,

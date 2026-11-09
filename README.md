@@ -43,22 +43,37 @@ closed unless you set `SIGNUPS=open`.
 
 | Name | What it is |
 | --- | --- |
-| `DATABASE_URL` | Postgres connection string. Not needed on Netlify. |
+| `DATABASE_URL` | Postgres connection string. Set for you by Neon on Vercel; not needed on Netlify. |
 | `BETTER_AUTH_SECRET` | Long random secret that signs login sessions. Required. |
-| `BETTER_AUTH_URL` | The address of the app. Needed locally, optional on Netlify. |
+| `BETTER_AUTH_URL` | The address of the app. Needed locally, optional on Vercel and Netlify. |
 | `SIGNUPS` | Set to `open` to let anyone create an account. Leave unset to keep it private. |
 
-## Put it online (Netlify)
+## Put it online (Vercel and Neon, free for personal use)
 
-1. Create a Netlify project from this repository.
-2. Add `BETTER_AUTH_SECRET` under Project configuration, Environment variables.
-3. Deploy. Netlify creates the database and applies everything in
-   `netlify/database/migrations` by itself.
-4. Open the site and create your account straight away, so the installation is
+1. Sign in at [vercel.com](https://vercel.com) with GitHub, choose **Add New,
+   Project**, and import this repository. Leave the build settings as they are.
+2. Before the first deploy finishes (or right after, if it fails for lack of a
+   database), open the project's **Storage** tab, choose **Neon**, create a
+   free database, and connect it to the project for all environments. This
+   adds `DATABASE_URL` for you.
+3. Under **Settings, Environment Variables**, add `BETTER_AUTH_SECRET` with a
+   long random value (for example from `openssl rand -base64 32`).
+4. Redeploy. Each build creates or updates the tables first
+   (`npm run vercel-build`), then builds the app.
+5. Open the site and create your account straight away, so the installation is
    yours.
 
-If you later add your own domain, redeploy once so sign-in picks up the new
-address (or set `BETTER_AUTH_URL` to it).
+Every merge to `main` then deploys by itself. If you add your own domain,
+redeploy once so sign-in picks up the new address (or set `BETTER_AUTH_URL`).
+
+Vercel's free Hobby plan is for personal, non-commercial use. Once Alimi uses
+Laneway as a business, move to Vercel Pro or another host.
+
+### Netlify instead
+
+Netlify also works: create a project from this repository, add
+`BETTER_AUTH_SECRET`, and deploy. Netlify creates the database and applies
+everything in `netlify/database/migrations` by itself.
 
 ## Email to a project
 
@@ -88,6 +103,7 @@ curl -X POST "<the address>" \
 | `npm run typecheck` | Type-check. |
 | `npm run db:generate` | After editing `src/db/schema.ts`: write a new migration. |
 | `npm run db:migrate` | Apply migrations to the database in `DATABASE_URL`. |
+| `npm run vercel-build` | What Vercel runs: apply migrations, then build. |
 
 Built with Next.js (App Router), React, TypeScript, Tailwind CSS, Postgres with
 Drizzle ORM, and Better Auth.
