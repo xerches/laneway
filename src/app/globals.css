@@ -80,6 +80,151 @@
   --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
 }
 
+/*
+ * Accent colors and dark backgrounds people can pick in Settings → Appearance.
+ * They are kept per device, like Light and Dark, as data-accent and data-dark
+ * on <html>. Indigo and Graphite are the defaults above. Dark accents are
+ * lighter, with dark text on them so buttons stay readable.
+ */
+
+:root[data-accent="blue"] {
+  --accent: #1d6fe0;
+  --accent-fg: #ffffff;
+}
+
+:root[data-accent="teal"] {
+  --accent: #0b7c78;
+  --accent-fg: #ffffff;
+}
+
+:root[data-accent="green"] {
+  --accent: #14804f;
+  --accent-fg: #ffffff;
+}
+
+:root[data-accent="orange"] {
+  --accent: #c4500f;
+  --accent-fg: #ffffff;
+}
+
+:root[data-accent="pink"] {
+  --accent: #c22f7d;
+  --accent-fg: #ffffff;
+}
+
+:root[data-accent="violet"] {
+  --accent: #7c3aed;
+  --accent-fg: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="blue"]:not([data-theme="light"]) {
+    --accent: #4b8ef7;
+    --accent-fg: #0b0d10;
+  }
+}
+:root[data-accent="blue"][data-theme="dark"] {
+  --accent: #4b8ef7;
+  --accent-fg: #0b0d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="teal"]:not([data-theme="light"]) {
+    --accent: #2bb3ac;
+    --accent-fg: #0b0d10;
+  }
+}
+:root[data-accent="teal"][data-theme="dark"] {
+  --accent: #2bb3ac;
+  --accent-fg: #0b0d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="green"]:not([data-theme="light"]) {
+    --accent: #3cc27f;
+    --accent-fg: #0b0d10;
+  }
+}
+:root[data-accent="green"][data-theme="dark"] {
+  --accent: #3cc27f;
+  --accent-fg: #0b0d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="orange"]:not([data-theme="light"]) {
+    --accent: #f2894a;
+    --accent-fg: #0b0d10;
+  }
+}
+:root[data-accent="orange"][data-theme="dark"] {
+  --accent: #f2894a;
+  --accent-fg: #0b0d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="pink"]:not([data-theme="light"]) {
+    --accent: #ee72b5;
+    --accent-fg: #0b0d10;
+  }
+}
+:root[data-accent="pink"][data-theme="dark"] {
+  --accent: #ee72b5;
+  --accent-fg: #0b0d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="violet"]:not([data-theme="light"]) {
+    --accent: #a47cff;
+    --accent-fg: #0b0d10;
+  }
+}
+:root[data-accent="violet"][data-theme="dark"] {
+  --accent: #a47cff;
+  --accent-fg: #0b0d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-dark="midnight"]:not([data-theme="light"]) {
+    --bg: #0b1020;
+    --surface: #121a2b;
+    --surface-2: #1a2338;
+    --border: #253049;
+    --border-strong: #34405c;
+    --text-muted: #a2acc0;
+    --text-faint: #707b92;
+  }
+}
+:root[data-dark="midnight"][data-theme="dark"] {
+  --bg: #0b1020;
+  --surface: #121a2b;
+  --surface-2: #1a2338;
+  --border: #253049;
+  --border-strong: #34405c;
+  --text-muted: #a2acc0;
+  --text-faint: #707b92;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-dark="black"]:not([data-theme="light"]) {
+    --bg: #000000;
+    --surface: #0c0d0f;
+    --surface-2: #16181b;
+    --border: #232629;
+    --border-strong: #33373d;
+    --text-muted: #a3aab6;
+    --text-faint: #737b88;
+  }
+}
+:root[data-dark="black"][data-theme="dark"] {
+  --bg: #000000;
+  --surface: #0c0d0f;
+  --surface-2: #16181b;
+  --border: #232629;
+  --border-strong: #33373d;
+  --text-muted: #a3aab6;
+  --text-faint: #737b88;
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);

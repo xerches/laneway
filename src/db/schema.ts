@@ -30,6 +30,8 @@ export const workspace = pgTable("workspace", {
   kind: text("kind").notNull().default("personal"),
   color: text("color").notNull().default("violet"),
   position: integer("position").notNull().default(0),
+  /** Where this workspace's notes live, e.g. an obsidian:// link. Empty when unset. */
+  wikiUrl: text("wiki_url").notNull().default(""),
   createdBy: text("created_by")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
@@ -418,6 +420,26 @@ export const apiToken = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("api_token_hash_idx").on(t.tokenHash), index("api_token_user_idx").on(t.userId)],
+);
+
+/**
+ * A private calendar link (iCalendar) that lists due dates, for Apple, Google
+ * or Outlook calendars to subscribe to. Read-only. The id is the secret in the
+ * link, kept as is so the link can be copied again on another device.
+ */
+export const calendarFeed = pgTable(
+  "calendar_feed",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    workspaceIds: jsonb("workspace_ids").$type<string[] | null>(),
+    lastFetchedAt: timestamp("last_fetched_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("calendar_feed_user_idx").on(t.userId)],
 );
 
 /**

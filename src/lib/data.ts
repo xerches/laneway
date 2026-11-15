@@ -4,6 +4,7 @@ import { db } from "@/db";
 import {
   activity,
   apiToken,
+  calendarFeed,
   automationRule,
   automationRun,
   dashboard,
@@ -113,6 +114,7 @@ export async function getWorkspaces(userId: string): Promise<WorkspaceLite[]> {
       name: workspace.name,
       kind: workspace.kind,
       color: workspace.color,
+      wikiUrl: workspace.wikiUrl,
     })
     .from(workspaceMember)
     .innerJoin(workspace, eq(workspace.id, workspaceMember.workspaceId))
@@ -713,6 +715,13 @@ export type ApiTokenLite = {
   createdAt: string;
 };
 
+export type CalendarFeedLite = {
+  id: string;
+  name: string;
+  workspaceIds: string[] | null;
+  lastFetchedAt: string | null;
+};
+
 export type GithubHookLite = {
   id: string;
   workspaceId: string;
@@ -729,7 +738,7 @@ export async function getIntegrations(userId: string) {
     .from(workspaceMember)
     .where(eq(workspaceMember.userId, userId));
   const workspaceIds = memberships.map((w) => w.id);
-  const [tokens, hooks] = await Promise.all([
+  const [tokens, hooks, feeds] = await Promise.all([
     db
       .select()
       .from(apiToken)
@@ -750,8 +759,21 @@ export async function getIntegrations(userId: string) {
           .where(inArray(githubHook.workspaceId, workspaceIds))
           .orderBy(asc(githubHook.createdAt))
       : Promise.resolve([]),
+    db
+      .select()
+      .from(calendarFeed)
+      .where(eq(calendarFeed.userId, userId))
+      .orderBy(asc(calendarFeed.createdAt)),
   ]);
   return {
+    feeds: feeds.map(
+      (f): CalendarFeedLite => ({
+        id: f.id,
+        name: f.name,
+        workspaceIds: f.workspaceIds,
+        lastFetchedAt: f.lastFetchedAt?.toISOString() ?? null,
+      }),
+    ),
     tokens: tokens.map(
       (t): ApiTokenLite => ({
         id: t.id,

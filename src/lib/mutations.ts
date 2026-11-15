@@ -4,6 +4,7 @@ import { db } from "@/db";
 import {
   activity,
   apiToken,
+  calendarFeed,
   automationRule,
   githubHook,
   dashboard,
@@ -115,7 +116,7 @@ export async function createWorkspace(
 export async function updateWorkspace(
   userId: string,
   workspaceId: string,
-  patch: { name?: string; color?: string },
+  patch: { name?: string; color?: string; wikiUrl?: string },
 ) {
   await requireRole(userId, workspaceId);
   await db.update(workspace).set(patch).where(eq(workspace.id, workspaceId));
@@ -1258,6 +1259,38 @@ export async function createApiToken(
 
 export async function revokeApiToken(actor: { id: string }, tokenId: string) {
   await db.delete(apiToken).where(and(eq(apiToken.id, tokenId), eq(apiToken.userId, actor.id)));
+}
+
+const MAX_FEEDS = 10;
+
+/** A private calendar link. Its id is the secret in the link. */
+export async function createCalendarFeed(
+  actor: { id: string },
+  input: { id: string; name: string; workspaceIds: string[] | null },
+) {
+  if (input.workspaceIds) {
+    if (input.workspaceIds.length === 0) {
+      throw new MutationError("Pick at least one workspace for this calendar.");
+    }
+    for (const ws of new Set(input.workspaceIds)) await requireMember(actor.id, ws);
+  }
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(calendarFeed)
+    .where(eq(calendarFeed.userId, actor.id));
+  if (n >= MAX_FEEDS) throw new MutationError(`You can have up to ${MAX_FEEDS} calendar links.`);
+  await db.insert(calendarFeed).values({
+    id: input.id,
+    userId: actor.id,
+    name: input.name,
+    workspaceIds: input.workspaceIds ? [...new Set(input.workspaceIds)] : null,
+  });
+}
+
+export async function deleteCalendarFeed(actor: { id: string }, feedId: string) {
+  await db
+    .delete(calendarFeed)
+    .where(and(eq(calendarFeed.id, feedId), eq(calendarFeed.userId, actor.id)));
 }
 
 async function loadHook(hookId: string) {

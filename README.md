@@ -13,11 +13,15 @@ This is phase 1 (the personal MVP). What works today:
   subtasks and a comment thread. Every change is logged in the item's activity.
 - **Recurring items**: finish one and the next copy appears with its new date.
 - **Dashboards** you arrange yourself: one across everything and one per
-  workspace. Pick from counters, lists (up next, due soon, overdue, next 14
-  days), project progress, recent activity, and charts (items by status,
+  workspace. Pick from counters, lists (up next, due soon, overdue), a
+  calendar of the next 30 days, project progress, recent activity, and charts (items by status,
   priority or label, done per week, and a burn-up). Drag to reorder, make a
   widget wide, and narrow any chart to one project.
 - **Inbox** for things that need you, plus notifications.
+- **Calendar link**: subscribe to your due dates from Apple Calendar, Google
+  Calendar or Outlook (read-only; you change dates in Laneway).
+- **Wiki link** per workspace, for example an `obsidian://` link to the notes
+  that go with it, shown above its projects.
 - **Email to a project**: each project has a private address that turns an
   incoming message into an item (see below).
 - **Templates** so a new project takes seconds, not a setup wizard.
@@ -48,7 +52,8 @@ This is phase 1 (the personal MVP). What works today:
   gets a link to it; when the PR merges, the item can move to done.
 - Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` to `5`
   to switch views.
-- Works on a phone browser, in light and dark mode.
+- Works on a phone browser, in light and dark mode, with your pick of accent
+  color and dark background (Settings → Appearance).
 
 Planned next: a ClickUp import, then teams.
 
@@ -177,6 +182,22 @@ then by kind; projects you already have (same name) are skipped.
 Projects get Backlog, To do, In progress, Blocked and Done unless the file
 lists its own `statuses` (`name`, `color`, `category`: todo, active or done).
 Colors: gray, red, orange, amber, green, teal, blue, indigo, violet, pink.
+
+## Calendar link
+
+Settings → **Calendar** makes a private link (`/api/calendar/<secret>.ics`)
+that lists every open item with a due date as an all-day event. Pick which
+workspaces it includes; work workspaces start unticked. Subscribe to it in
+Apple Calendar (File → New Calendar Subscription), Google Calendar (Other
+calendars → From URL) or Outlook. It is read-only and calendars refresh it
+about every hour. The secret in the link is its only key: delete the link in
+Settings to stop it working.
+
+When Laneway runs on your own computer, open Settings from the address your
+other devices use (your Tailscale address, say), so the link works on them. A
+Mac should subscribe "On My Mac" rather than in iCloud, because iCloud's
+servers can't reach a private address. Google Calendar fetches links from
+Google's servers, so it only works when Laneway is online.
 
 ## API, Claude and GitHub
 

@@ -53,7 +53,7 @@ import {
 } from "@/components/ui/overlays";
 import { clientId, useToday } from "@/lib/client";
 import { colorFg, colorVar } from "@/lib/colors";
-import { addDaysTo, formatShort, parseDate, toDateString } from "@/lib/dates";
+import { addDaysTo, daysBetween, formatShort, parseDate, toDateString } from "@/lib/dates";
 import {
   PRIORITIES,
   type DashboardActivity,
@@ -380,7 +380,7 @@ function WidgetFrame({
   if (!meta) return null;
 
   const project = widget.projectId ? projects.find((p) => p.id === widget.projectId) : undefined;
-  const view = renderWidget(widget.type as WidgetType, ctx, project);
+  const view = renderWidget(widget.type as WidgetType, ctx, project, widget.size === "full");
 
   const style = {
     transform: CSS.Translate.toString(transform),
@@ -508,6 +508,7 @@ function renderWidget(
   type: WidgetType,
   ctx: WidgetContext,
   project: ProjectLite | undefined,
+  wide = false,
 ): WidgetView {
   const { stats, today, filter, setFilter } = ctx;
   const scoped = project ? ctx.items.filter((i) => i.projectId === project.id) : ctx.items;
@@ -631,9 +632,10 @@ function renderWidget(
     case "two-weeks":
       return {
         body: (
-          <TwoWeeks
+          <NextThirtyDays
             items={stats.open}
             today={today}
+            wide={wide}
             selected={typeof filter === "object" ? filter.day : null}
             onSelect={(day) =>
               setFilter(typeof filter === "object" && filter.day === day ? "next" : { day })
@@ -956,51 +958,115 @@ function WorkList({
   );
 }
 
-function TwoWeeks({
+const CALENDAR_DAYS = 30;
+
+/**
+ * A month-style calendar of the next 30 days, Monday first. Days before today
+ * and after the 30th are shown faded so the weeks stay whole. Picking a day
+ * filters "Up next" to it. Wide, each day also names what is due.
+ */
+function NextThirtyDays({
   items,
   today,
+  wide,
   selected,
   onSelect,
 }: {
   items: DashboardItem[];
   today: string;
+  wide: boolean;
   selected: string | null;
   onSelect: (day: string) => void;
 }) {
-  const days = Array.from({ length: 14 }, (_, i) => addDaysTo(today, i));
+  const last = addDaysTo(today, CALENDAR_DAYS - 1);
+  const first = startOfWeek(today);
+  const count = daysBetween(first, startOfWeek(last)) + 7;
+  const days = Array.from({ length: count }, (_, i) => addDaysTo(first, i));
+  const byDay = new Map<string, DashboardItem[]>();
+  for (const item of items) {
+    if (!item.dueDate || item.dueDate < today || item.dueDate > last) continue;
+    byDay.set(item.dueDate, [...(byDay.get(item.dueDate) ?? []), item]);
+  }
+  const weekdays = days.slice(0, 7).map((d) =>
+    parseDate(d).toLocaleDateString(undefined, { weekday: "short" }).slice(0, wide ? 3 : 2),
+  );
+
   return (
-    <div className="thin-scroll overflow-x-auto p-3">
-      <div className="grid min-w-[560px] grid-cols-[repeat(14,minmax(0,1fr))] gap-1">
+    <div className="p-3">
+      <div className="mb-1 grid grid-cols-7 gap-1" aria-hidden>
+        {weekdays.map((name, i) => (
+          <span key={i} className="text-center text-[10px] font-medium text-faint uppercase">
+            {name}
+          </span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
         {days.map((day) => {
-          const due = items.filter((i) => i.dueDate === day);
+          const inRange = day >= today && day <= last;
+          const due = byDay.get(day) ?? [];
           const date = parseDate(day);
           const weekend = date.getDay() === 0 || date.getDay() === 6;
+          const showMonth = date.getDate() === 1 || day === first;
+          const number = (
+            <span className="flex items-center gap-1">
+              <span
+                className={cn(
+                  "flex h-5 min-w-5 items-center justify-center rounded-full text-xs tabular-nums",
+                  day === today ? "bg-accent px-1 font-semibold text-accent-fg" : inRange ? "text-ink" : "text-faint",
+                )}
+              >
+                {date.getDate()}
+              </span>
+              {showMonth ? (
+                <span className="text-[10px] font-medium text-faint">
+                  {date.toLocaleDateString(undefined, { month: "short" })}
+                </span>
+              ) : null}
+            </span>
+          );
+          if (!inRange) {
+            return (
+              <div
+                key={day}
+                aria-hidden
+                className={cn("flex flex-col rounded-lg px-1 py-1 opacity-50", wide ? "h-[56px] sm:h-[84px]" : "h-[56px]")}
+              >
+                {number}
+              </div>
+            );
+          }
           return (
             <button
               key={day}
               onClick={() => onSelect(day)}
               aria-pressed={selected === day}
               aria-label={`${formatShort(day)}: ${due.length} due`}
+              title={due.length ? due.map((i) => i.title).join("\n") : undefined}
               className={cn(
-                "flex h-[72px] flex-col items-center gap-1 rounded-lg border px-0.5 py-1.5 transition-colors",
+                "flex min-w-0 flex-col items-start gap-1 rounded-lg border px-1 py-1 text-left transition-colors",
+                wide ? "h-[56px] sm:h-[84px]" : "h-[56px]",
                 selected === day
                   ? "border-accent bg-accent/8"
                   : "border-transparent hover:bg-surface-2",
                 weekend && selected !== day && "bg-surface-2/50",
               )}
             >
-              <span className="text-[10px] font-medium text-faint uppercase">
-                {date.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2)}
-              </span>
-              <span
-                className={cn(
-                  "flex h-5 min-w-5 items-center justify-center rounded-full text-xs tabular-nums",
-                  day === today ? "bg-accent px-1 font-semibold text-accent-fg" : "text-ink",
-                )}
-              >
-                {date.getDate()}
-              </span>
-              <span className="flex h-3 flex-wrap items-center justify-center gap-0.5">
+              {number}
+              {wide ? (
+                <span className="hidden w-full min-w-0 flex-col gap-0.5 sm:flex">
+                  {due.slice(0, 2).map((i) => (
+                    <span key={i.id} className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted">
+                      <Dot color={i.projectColor} className="h-1.5 w-1.5 shrink-0" />
+                      <span className="truncate">{i.title}</span>
+                    </span>
+                  ))}
+                  {due.length > 2 ? (
+                    <span className="text-[10px] leading-none text-faint">+{due.length - 2} more</span>
+                  ) : null}
+                </span>
+              ) : null}
+              {/* Narrow, or on a phone: a dot per item. */}
+              <span className={cn("flex h-3 flex-wrap items-center gap-0.5 px-0.5", wide && "sm:hidden")}>
                 {due.slice(0, 4).map((i) => (
                   <Dot key={i.id} color={i.projectColor} className="h-1.5 w-1.5" />
                 ))}
