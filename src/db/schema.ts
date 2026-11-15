@@ -206,3 +206,57 @@ export const notification = pgTable(
   },
   (t) => [index("notification_user_idx").on(t.userId, t.readAt)],
 );
+
+/**
+ * Labels are shared by every project in a workspace, so "waiting" means the
+ * same thing on the Wedding board and the Fitness board.
+ */
+export const label = pgTable(
+  "label",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    color: text("color").notNull().default("gray"),
+    position: integer("position").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("label_workspace_idx").on(t.workspaceId)],
+);
+
+export const itemLabel = pgTable(
+  "item_label",
+  {
+    itemId: text("item_id")
+      .notNull()
+      .references(() => item.id, { onDelete: "cascade" }),
+    labelId: text("label_id")
+      .notNull()
+      .references(() => label.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.itemId, t.labelId] }),
+    index("item_label_label_idx").on(t.labelId),
+  ],
+);
+
+/** Web pages, Obsidian notes and anything else an item points at. */
+export const itemLink = pgTable(
+  "item_link",
+  {
+    id: text("id").primaryKey(),
+    itemId: text("item_id")
+      .notNull()
+      .references(() => item.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    title: text("title").notNull().default(""),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("item_link_item_idx").on(t.itemId)],
+);

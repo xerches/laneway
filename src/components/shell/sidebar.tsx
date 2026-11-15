@@ -3,7 +3,15 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Home, Inbox, LogOut, MoreHorizontal, Plus, Search } from "lucide-react";
+import {
+  CalendarCheck,
+  Home,
+  Inbox,
+  LogOut,
+  MoreHorizontal,
+  Plus,
+  Search,
+} from "lucide-react";
 import { toast } from "sonner";
 import { createWorkspace, updateWorkspace } from "@/actions";
 import { Wordmark } from "@/components/logo";
@@ -64,6 +72,10 @@ export function Sidebar() {
         <Link href="/" className={cn(navItem, pathname === "/" && navActive)}>
           <Home size={15} />
           Home
+        </Link>
+        <Link href="/week" className={cn(navItem, pathname === "/week" && navActive)}>
+          <CalendarCheck size={15} />
+          My week
         </Link>
         <Link href="/inbox" className={cn(navItem, pathname === "/inbox" && navActive)}>
           <Inbox size={15} />

@@ -18,12 +18,20 @@ This is phase 1 (the personal MVP). What works today:
 - **Email to a project**: each project has a private address that turns an
   incoming message into an item (see below).
 - **Templates** so a new project takes seconds, not a setup wizard.
-- Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` `2` `3`
+- **Labels**, shared across a workspace's projects, with colors. Filter any
+  view by label, priority, or hide what's done.
+- **Links** on items: web pages, GitHub, and `obsidian://` notes that open
+  straight in Obsidian.
+- **Timeline**: a Gantt chart of everything with dates. Drag a bar to move it,
+  or drag its ends to change the start or due date.
+- **My week**: what's overdue, due each day and in progress, across every
+  workspace.
+- Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` to `4`
   to switch views.
 - Works on a phone browser, in light and dark mode.
 
-Planned next: timeline, dependencies, time tracking, automations, GitHub and
-ClickUp connections, then teams.
+Planned next: pages and page templates, custom dashboards, automations, an
+API for assistants, GitHub and ClickUp connections, then teams.
 
 ## Run it on your computer
 

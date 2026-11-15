@@ -49,6 +49,7 @@ import {
 import { colorFg, colorVar } from "@/lib/colors";
 import type { ItemLite, StatusCategory, StatusLite } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { LabelChips } from "./labels";
 import { DueChip, PriorityIcon, RepeatBadge } from "./pickers";
 import { useProject } from "./store";
 
@@ -73,7 +74,7 @@ function findColumn(columns: Columns, id: string): string | null {
 }
 
 export function Board({ onOpen }: { onOpen: (id: string) => void }) {
-  const { statuses, items, changeItem, addStatus } = useProject();
+  const { statuses, visibleItems: items, changeItem, addStatus } = useProject();
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   const saved = useMemo(() => buildColumns(statuses, items), [statuses, items]);
 
@@ -402,7 +403,7 @@ function SortableCard({ item, onOpen }: { item: ItemLite; onOpen: (id: string) =
 }
 
 export function CardBody({ item, dragging }: { item: ItemLite; dragging?: boolean }) {
-  const { project, members, today } = useProject();
+  const { project, members, today, labels } = useProject();
   const assignee = members.find((m) => m.id === item.assigneeId);
   const done = Boolean(item.completedAt);
   return (
@@ -415,6 +416,7 @@ export function CardBody({ item, dragging }: { item: ItemLite; dragging?: boolea
       <p className={cn("text-[13px] leading-snug font-medium break-words", done && "text-muted line-through")}>
         {item.title}
       </p>
+      <LabelChips ids={item.labelIds} labels={labels} className="mt-1.5" />
       <div className="mt-2 flex items-center gap-2.5">
         {item.number > 0 ? (
           <span className="text-[11px] text-faint tabular-nums">

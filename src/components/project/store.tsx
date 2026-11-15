@@ -16,6 +16,7 @@ import { clientId } from "@/lib/client";
 import type {
   ActionResult,
   ItemLite,
+  LabelLite,
   Member,
   Priority,
   ProjectFull,
@@ -24,7 +25,7 @@ import type {
   StatusLite,
 } from "@/lib/types";
 
-type Data = { items: ItemLite[]; statuses: StatusLite[] };
+type Data = { items: ItemLite[]; statuses: StatusLite[]; labels: LabelLite[] };
 
 type Op =
   | { type: "item.add"; item: ItemLite }
@@ -33,7 +34,10 @@ type Op =
   | { type: "status.add"; status: StatusLite }
   | { type: "status.patch"; id: string; patch: Partial<StatusLite> }
   | { type: "status.remove"; id: string; moveToId: string }
-  | { type: "status.reorder"; ids: string[] };
+  | { type: "status.reorder"; ids: string[] }
+  | { type: "label.add"; label: LabelLite }
+  | { type: "label.patch"; id: string; patch: Partial<LabelLite> }
+  | { type: "label.remove"; id: string };
 
 function reduce(data: Data, op: Op): Data {
   switch (op.type) {
@@ -53,8 +57,26 @@ function reduce(data: Data, op: Op): Data {
         ...data,
         statuses: data.statuses.map((s) => (s.id === op.id ? { ...s, ...op.patch } : s)),
       };
+    case "label.add":
+      return { ...data, labels: [...data.labels, op.label] };
+    case "label.patch":
+      return {
+        ...data,
+        labels: data.labels.map((l) => (l.id === op.id ? { ...l, ...op.patch } : l)),
+      };
+    case "label.remove":
+      return {
+        ...data,
+        labels: data.labels.filter((l) => l.id !== op.id),
+        items: data.items.map((i) =>
+          i.labelIds.includes(op.id)
+            ? { ...i, labelIds: i.labelIds.filter((l) => l !== op.id) }
+            : i,
+        ),
+      };
     case "status.remove":
       return {
+        ...data,
         statuses: data.statuses.filter((s) => s.id !== op.id),
         items: data.items.map((i) =>
           i.statusId === op.id ? { ...i, statusId: op.moveToId } : i,
@@ -85,6 +107,28 @@ export type ItemChanges = {
   position?: number;
 };
 
+/** What the filter bar narrows every view down to. */
+export type ItemFilter = {
+  labelIds: string[];
+  priorities: Priority[];
+  hideDone: boolean;
+};
+
+export const EMPTY_FILTER: ItemFilter = { labelIds: [], priorities: [], hideDone: false };
+
+export function filterCount(filter: ItemFilter): number {
+  return filter.labelIds.length + filter.priorities.length + (filter.hideDone ? 1 : 0);
+}
+
+export function matchesFilter(item: ItemLite, filter: ItemFilter): boolean {
+  if (filter.hideDone && item.completedAt) return false;
+  if (filter.priorities.length && !filter.priorities.includes(item.priority)) return false;
+  if (filter.labelIds.length && !filter.labelIds.some((id) => item.labelIds.includes(id))) {
+    return false;
+  }
+  return true;
+}
+
 export type NewItemInput = {
   title: string;
   statusId?: string;
@@ -97,7 +141,12 @@ type Store = {
   userId: string;
   today: string;
   items: ItemLite[];
+  /** The items that pass the filter bar. Views draw these. */
+  visibleItems: ItemLite[];
   statuses: StatusLite[];
+  labels: LabelLite[];
+  filter: ItemFilter;
+  setFilter: (filter: ItemFilter) => void;
   /** Bumped after every saved change, so open panels know to reload. */
   version: number;
   addItem: (input: NewItemInput) => string;
@@ -107,6 +156,10 @@ type Store = {
   changeStatus: (id: string, patch: { name?: string; color?: string; category?: StatusCategory }) => void;
   removeStatus: (id: string) => void;
   moveStatus: (id: string, direction: -1 | 1) => void;
+  addLabel: (name: string, color?: string) => string;
+  changeLabel: (id: string, patch: { name?: string; color?: string }) => void;
+  removeLabel: (id: string) => void;
+  setItemLabels: (itemId: string, labelIds: string[]) => void;
   /** Runs a server action that isn't modeled above, then refreshes panels. */
   run: <T>(work: () => Promise<ActionResult<T>>) => Promise<ActionResult<T>>;
 };
@@ -119,12 +172,15 @@ export function useProject(): Store {
   return store;
 }
 
+const LABEL_COLORS = ["violet", "orange", "amber", "teal", "pink", "blue", "indigo", "red", "green"];
+
 const STATUS_COLORS = ["blue", "violet", "orange", "teal", "pink", "indigo", "amber", "red"];
 
 export function ProjectStore({
   project,
   statuses,
   items,
+  labels,
   members,
   userId,
   today,
@@ -133,14 +189,16 @@ export function ProjectStore({
   project: ProjectFull;
   statuses: StatusLite[];
   items: ItemLite[];
+  labels: LabelLite[];
   members: Member[];
   userId: string;
   today: string;
   children: ReactNode;
 }) {
-  const base = useMemo(() => ({ items, statuses }), [items, statuses]);
+  const base = useMemo(() => ({ items, statuses, labels }), [items, statuses, labels]);
   const [data, apply] = useOptimistic(base, reduce);
   const [version, setVersion] = useState(0);
+  const [filter, setFilter] = useState<ItemFilter>(EMPTY_FILTER);
 
   const commit = useCallback(
     <T,>(op: Op | null, work: () => Promise<ActionResult<T>>, onDone?: (result: T) => void) => {
@@ -168,7 +226,13 @@ export function ProjectStore({
       userId,
       today,
       items: data.items,
+      visibleItems: filterCount(filter)
+        ? data.items.filter((i) => matchesFilter(i, filter))
+        : data.items,
       statuses: sorted,
+      labels: [...data.labels].sort((a, b) => a.position - b.position),
+      filter,
+      setFilter,
       version,
 
       addItem(input) {
@@ -200,6 +264,7 @@ export function ProjectStore({
           commentCount: 0,
           subtaskTotal: 0,
           subtaskDone: 0,
+          labelIds: [],
         };
         commit({ type: "item.add", item }, () =>
           actions.createItem({
@@ -287,6 +352,39 @@ export function ProjectStore({
         );
       },
 
+      addLabel(name, color) {
+        const id = clientId();
+        const used = data.labels.map((l) => l.color);
+        const chosen = color ?? LABEL_COLORS.find((c) => !used.includes(c)) ?? "blue";
+        const label: LabelLite = {
+          id,
+          workspaceId: project.workspaceId,
+          name,
+          color: chosen,
+          position: data.labels.length,
+        };
+        commit({ type: "label.add", label }, () =>
+          actions.createLabel({ id, workspaceId: project.workspaceId, name, color: chosen }),
+        );
+        return id;
+      },
+
+      changeLabel(id, patch) {
+        commit({ type: "label.patch", id, patch }, () =>
+          actions.updateLabel({ labelId: id, ...patch }),
+        );
+      },
+
+      removeLabel(id) {
+        commit({ type: "label.remove", id }, () => actions.deleteLabel({ labelId: id }));
+      },
+
+      setItemLabels(itemId, labelIds) {
+        commit({ type: "item.patch", id: itemId, patch: { labelIds } }, () =>
+          actions.setItemLabels({ itemId, labelIds }),
+        );
+      },
+
       run(work) {
         return new Promise((resolve) => {
           startTransition(async () => {
@@ -298,7 +396,7 @@ export function ProjectStore({
         });
       },
     };
-  }, [data, project, members, userId, today, version, commit]);
+  }, [data, project, members, userId, today, version, commit, filter]);
 
   return <StoreContext value={store}>{children}</StoreContext>;
 }

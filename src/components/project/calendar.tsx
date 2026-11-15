@@ -36,7 +36,7 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** Items laid out on the days they are due. Drag one to reschedule it. */
 export function CalendarView({ onOpen }: { onOpen: (id: string) => void }) {
-  const { items, statuses, today, changeItem, addItem } = useProject();
+  const { visibleItems: items, statuses, today, changeItem, addItem } = useProject();
   const [mode, setMode] = useState<Mode>("month");
   const [cursor, setCursor] = useState(today);
   const [activeId, setActiveId] = useState<string | null>(null);
