@@ -3,7 +3,9 @@ import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   activity,
+  apiToken,
   automationRule,
+  githubHook,
   dashboard,
   item,
   itemLabel,
@@ -44,11 +46,15 @@ export class MutationError extends Error {}
 /**
  * Who is making a change. `via` names the automation rule acting for them, so
  * the item's activity says "Automation “…”" instead of the person's name.
+ * `by` replaces the name shown in the activity, for changes that arrive
+ * through an API token ("Alex via Luna") or an integration ("GitHub").
  */
-export type Actor = { id: string; name: string; via?: string };
+export type Actor = { id: string; name: string; via?: string; by?: string };
 
-const viaData = (actor: { via?: string }): Record<string, string> =>
-  actor.via ? { via: actor.via } : {};
+const viaData = (actor: { via?: string; by?: string }): Record<string, string> => ({
+  ...(actor.via ? { via: actor.via } : {}),
+  ...(actor.by ? { by: actor.by } : {}),
+});
 
 async function requireRole(userId: string, workspaceId: string) {
   const [row] = await db
@@ -313,6 +319,8 @@ type NewItem = {
   recurrence?: Recurrence | null;
   source?: string;
   labelIds?: string[];
+  /** Shown in the activity instead of the person's name, e.g. "Alex via Luna". */
+  by?: string;
 };
 
 /**
@@ -387,6 +395,7 @@ export async function insertItem(actorId: string | null, input: NewItem) {
       workspaceId: proj.workspaceId,
       userId: actorId,
       type: "created",
+      data: input.by ? { by: input.by } : null,
     });
     if (labelIds.length) {
       await tx.insert(itemLabel).values(labelIds.map((labelId) => ({ itemId: id, labelId })));
@@ -701,7 +710,7 @@ export async function addComment(
       userId: actor.id,
       type: "comment",
       body,
-      data: actor.via ? viaData(actor) : null,
+      data: actor.via || actor.by ? viaData(actor) : null,
     });
     await tx.update(item).set({ updatedAt: new Date() }).where(eq(item.id, itemId));
 
@@ -1210,4 +1219,143 @@ export async function requireRuleAccess(actor: { id: string }, ruleId: string) {
   const rule = await loadRule(ruleId);
   await requireRole(actor.id, rule.workspaceId);
   return rule;
+}
+
+// -------------------------------------------------------------- integrations
+
+const MAX_TOKENS = 20;
+const MAX_HOOKS = 10;
+
+/**
+ * Saves a new API token. Only its hash is kept; the caller shows the token
+ * once. `workspaceIds` null means every workspace the person is in, now and
+ * later; a list keeps the token to those workspaces.
+ */
+export async function createApiToken(
+  actor: { id: string },
+  input: { id: string; name: string; hash: string; prefix: string; workspaceIds: string[] | null },
+) {
+  if (input.workspaceIds) {
+    if (input.workspaceIds.length === 0) {
+      throw new MutationError("Pick at least one workspace for this token.");
+    }
+    for (const ws of new Set(input.workspaceIds)) await requireRole(actor.id, ws);
+  }
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(apiToken)
+    .where(eq(apiToken.userId, actor.id));
+  if (n >= MAX_TOKENS) throw new MutationError(`You can have up to ${MAX_TOKENS} tokens.`);
+  await db.insert(apiToken).values({
+    id: input.id,
+    userId: actor.id,
+    name: input.name,
+    tokenHash: input.hash,
+    prefix: input.prefix,
+    workspaceIds: input.workspaceIds ? [...new Set(input.workspaceIds)] : null,
+  });
+}
+
+export async function revokeApiToken(actor: { id: string }, tokenId: string) {
+  await db.delete(apiToken).where(and(eq(apiToken.id, tokenId), eq(apiToken.userId, actor.id)));
+}
+
+async function loadHook(hookId: string) {
+  const [row] = await db.select().from(githubHook).where(eq(githubHook.id, hookId));
+  if (!row) throw new MutationError("That webhook no longer exists.");
+  return row;
+}
+
+export async function createGithubHook(
+  actor: { id: string },
+  input: { id: string; workspaceId: string; secret: string; onMerge: "done" | "none" },
+) {
+  await requireRole(actor.id, input.workspaceId);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(githubHook)
+    .where(eq(githubHook.workspaceId, input.workspaceId));
+  if (n >= MAX_HOOKS) throw new MutationError(`A workspace can have up to ${MAX_HOOKS} webhooks.`);
+  await db.insert(githubHook).values({ ...input, createdBy: actor.id });
+}
+
+/**
+ * Changes a webhook. Whoever saves it becomes the person it acts for, as
+ * with automation rules.
+ */
+export async function updateGithubHook(
+  actor: { id: string },
+  hookId: string,
+  patch: { onMerge?: "done" | "none"; secret?: string },
+) {
+  const hook = await loadHook(hookId);
+  await requireRole(actor.id, hook.workspaceId);
+  await db
+    .update(githubHook)
+    .set({ ...patch, createdBy: actor.id })
+    .where(eq(githubHook.id, hookId));
+}
+
+export async function deleteGithubHook(actor: { id: string }, hookId: string) {
+  const hook = await loadHook(hookId);
+  await requireRole(actor.id, hook.workspaceId);
+  await db.delete(githubHook).where(eq(githubHook.id, hookId));
+}
+
+/**
+ * Links a pull request to an item and notes it in the item's feed. Returns
+ * false when the item already had this link, so a PR edit doesn't repeat it.
+ */
+export async function linkPullRequest(
+  actor: Actor,
+  itemId: string,
+  pr: { url: string; title: string; number: number },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const [existing] = await db
+    .select({ id: itemLink.id })
+    .from(itemLink)
+    .where(and(eq(itemLink.itemId, itemId), eq(itemLink.url, pr.url)));
+  if (existing) return false;
+  const title = `#${pr.number} ${pr.title}`.slice(0, 200);
+  await db.transaction(async (tx) => {
+    await tx.insert(itemLink).values({
+      id: newId(),
+      itemId,
+      workspaceId: current.workspaceId,
+      url: pr.url,
+      title,
+      createdBy: actor.id,
+    });
+    await tx.insert(activity).values({
+      id: newId(),
+      itemId,
+      projectId: current.projectId,
+      workspaceId: current.workspaceId,
+      userId: actor.id,
+      type: "github",
+      data: { action: "linked", pr: `#${pr.number}`, title: pr.title.slice(0, 200), ...viaData(actor) },
+    });
+  });
+  return true;
+}
+
+/** Notes a merged pull request in the item's feed. */
+export async function noteMergedPullRequest(
+  actor: Actor,
+  itemId: string,
+  pr: { title: string; number: number },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  await db.insert(activity).values({
+    id: newId(),
+    itemId,
+    projectId: current.projectId,
+    workspaceId: current.workspaceId,
+    userId: actor.id,
+    type: "github",
+    data: { action: "merged", pr: `#${pr.number}`, title: pr.title.slice(0, 200), ...viaData(actor) },
+  });
 }

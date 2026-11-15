@@ -396,3 +396,47 @@ export const automationRun = pgTable(
     uniqueIndex("automation_run_dedupe_idx").on(t.ruleId, t.dedupeKey),
   ],
 );
+
+/**
+ * Personal API tokens for the REST API and the MCP endpoint. Only a hash of
+ * the token is stored; the token itself is shown once, when it's made.
+ * `workspaceIds` limits a token to some workspaces (null means all of them).
+ */
+export const apiToken = pgTable(
+  "api_token",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    // The first characters, so you can tell tokens apart.
+    prefix: text("prefix").notNull(),
+    workspaceIds: jsonb("workspace_ids").$type<string[] | null>(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("api_token_hash_idx").on(t.tokenHash), index("api_token_user_idx").on(t.userId)],
+);
+
+/**
+ * A GitHub webhook for one workspace. Pull requests that mention an item key
+ * (like ALI-12) link to the item, and merging can move the item.
+ */
+export const githubHook = pgTable(
+  "github_hook",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    // done | none: what a merged pull request does to the items it mentions.
+    onMerge: text("on_merge").notNull().default("done"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("github_hook_workspace_idx").on(t.workspaceId)],
+);

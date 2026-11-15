@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   Plus,
   Search,
+  Settings,
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -195,6 +196,17 @@ export function Sidebar() {
           <p className="truncate text-[13px] font-medium">{user.name}</p>
           <p className="truncate text-[11px] text-faint">{user.email}</p>
         </div>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings: API tokens, Claude and GitHub"
+          className={cn(
+            "rounded-md p-1.5 text-faint hover:bg-surface-2 hover:text-ink",
+            pathname === "/settings" && "bg-surface-2 text-ink",
+          )}
+        >
+          <Settings size={15} />
+        </Link>
         <button
           onClick={signOut}
           aria-label="Sign out"

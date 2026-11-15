@@ -637,6 +637,10 @@ export function describeActivity(entry: ActivityEntry, today: string): string | 
       return null;
     case "moved":
       return `moved this from ${d.from} to ${d.to}`;
+    case "github":
+      return d.action === "merged"
+        ? `merged pull request ${d.pr}`
+        : `linked pull request ${d.pr}${d.title ? ` “${d.title}”` : ""}`;
     default:
       return null;
   }

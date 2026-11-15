@@ -1,5 +1,6 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -10,6 +11,7 @@ import { fireAutomations, testRule as runRuleTest, type AutomationEvent } from "
 import { ruleInputSchema, type RuleInput } from "@/lib/automation-types";
 import { todayString } from "@/lib/dates";
 import * as m from "@/lib/mutations";
+import { newToken } from "@/lib/api";
 import { requireUser } from "@/lib/session";
 import { TEMPLATES } from "@/lib/templates";
 import { MAX_WIDGETS, WIDGETS } from "@/lib/widgets";
@@ -605,4 +607,68 @@ export async function loadRuleRuns(input: { ruleId: string }): Promise<RunEntry[
   const data = z.object({ ruleId: id }).parse(input);
   await m.requireRuleAccess(user, data.ruleId);
   return getRuleRuns(data.ruleId);
+}
+
+// -------------------------------------------------------------- integrations
+
+/** Makes an API token. The token is returned once and never stored. */
+export async function createApiToken(input: { id: string; name: string; workspaceIds: string[] | null }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, name: z.string().trim().min(1).max(60), workspaceIds: z.array(id).max(50).nullable() })
+      .parse(input);
+    const made = newToken();
+    await m.createApiToken(user, { ...data, hash: made.hash, prefix: made.prefix });
+    return { token: made.token };
+  });
+}
+
+export async function revokeApiToken(input: { tokenId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ tokenId: id }).parse(input);
+    await m.revokeApiToken(user, data.tokenId);
+  });
+}
+
+const onMerge = z.enum(["done", "none"]);
+const hookSecret = () => randomBytes(24).toString("hex");
+
+/** Makes a GitHub webhook. Its secret is returned once, to paste into GitHub. */
+export async function createGithubHook(input: { id: string; workspaceId: string; onMerge: "done" | "none" }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, workspaceId: id, onMerge }).parse(input);
+    const secret = hookSecret();
+    await m.createGithubHook(user, { ...data, secret });
+    return { secret };
+  });
+}
+
+export async function setGithubHookOnMerge(input: { hookId: string; onMerge: "done" | "none" }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ hookId: id, onMerge }).parse(input);
+    await m.updateGithubHook(user, data.hookId, { onMerge: data.onMerge });
+  });
+}
+
+/** Replaces a webhook's secret, for when the old one is lost or leaked. */
+export async function newGithubHookSecret(input: { hookId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ hookId: id }).parse(input);
+    const secret = hookSecret();
+    await m.updateGithubHook(user, data.hookId, { secret });
+    return { secret };
+  });
+}
+
+export async function deleteGithubHook(input: { hookId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ hookId: id }).parse(input);
+    await m.deleteGithubHook(user, data.hookId);
+  });
 }
