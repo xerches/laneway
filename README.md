@@ -12,8 +12,11 @@ This is phase 1 (the personal MVP). What works today:
 - **Items** with status, priority, owner, start and due dates, a description,
   subtasks and a comment thread. Every change is logged in the item's activity.
 - **Recurring items**: finish one and the next copy appears with its new date.
-- **Dashboard**: what's due today, overdue, in progress and done this week,
-  across everything or one workspace.
+- **Dashboards** you arrange yourself: one across everything and one per
+  workspace. Pick from counters, lists (up next, due soon, overdue, next 14
+  days), project progress, recent activity, and charts (items by status,
+  priority or label, done per week, and a burn-up). Drag to reorder, make a
+  widget wide, and narrow any chart to one project.
 - **Inbox** for things that need you, plus notifications.
 - **Email to a project**: each project has a private address that turns an
   incoming message into an item (see below).
@@ -35,7 +38,7 @@ This is phase 1 (the personal MVP). What works today:
   to switch views.
 - Works on a phone browser, in light and dark mode.
 
-Planned next: custom dashboards, automations, an
+Planned next: automations, an
 API for assistants, GitHub and ClickUp connections, then teams.
 
 ## Run it on your computer
@@ -128,7 +131,8 @@ Where things live:
 - `src/lib/mutations.ts`: every write, with the same check.
 - `src/actions/index.ts`: what the browser is allowed to call.
 - `src/components/project/`: board, list, calendar and the item panel.
-- `src/components/dashboard/`: home dashboard and inbox.
+- `src/components/dashboard/`: dashboards, their widgets and charts, and the inbox.
+- `src/lib/widgets.ts`: the widget catalog and the default layout.
 - `netlify/database/migrations/`: SQL migrations. Never edit one that has
   already been applied; add a new one instead.
 

@@ -9,6 +9,7 @@ import { getItemDetail, getPage, getWorkspaces, searchItems } from "@/lib/data";
 import * as m from "@/lib/mutations";
 import { requireUser } from "@/lib/session";
 import { TEMPLATES } from "@/lib/templates";
+import { MAX_WIDGETS, WIDGETS } from "@/lib/widgets";
 import type { ActionResult, ItemDetail, PageFull } from "@/lib/types";
 import type { SearchHit } from "@/lib/data";
 
@@ -497,4 +498,40 @@ export async function loadItemDetail(itemId: string): Promise<ItemDetail | null>
 export async function searchAllItems(query: string): Promise<SearchHit[]> {
   const user = await requireUser();
   return searchItems(user.id, String(query).slice(0, 100));
+}
+
+// ---------------------------------------------------------------- dashboards
+
+const widget = z.object({
+  id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  type: z.enum(WIDGETS.map((w) => w.type) as [string, ...string[]]),
+  size: z.enum(["half", "full"]),
+  projectId: id.nullish(),
+});
+
+export async function saveDashboard(input: {
+  workspaceId: string | null;
+  widgets: { id: string; type: string; size: "half" | "full"; projectId?: string | null }[];
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ workspaceId: id.nullable(), widgets: z.array(widget).max(MAX_WIDGETS) })
+      .parse(input);
+    const ids = new Set(data.widgets.map((w) => w.id));
+    if (ids.size !== data.widgets.length) throw new m.MutationError("Two widgets share an id.");
+    await m.saveDashboard(
+      user,
+      data.workspaceId,
+      data.widgets.map((w) => ({ ...w, projectId: w.projectId ?? null })),
+    );
+  });
+}
+
+export async function resetDashboard(input: { workspaceId: string | null }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ workspaceId: id.nullable() }).parse(input);
+    await m.resetDashboard(user, data.workspaceId);
+  });
 }

@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql } from "drizzl
 import { db } from "@/db";
 import {
   activity,
+  dashboard,
   item,
   itemLink,
   label,
@@ -19,6 +20,7 @@ import type {
   ActivityEntry,
   DashboardActivity,
   DashboardItem,
+  DashboardProjectCount,
   ItemDetail,
   ItemLite,
   LabelLite,
@@ -34,6 +36,7 @@ import type {
   StatusLite,
   WorkspaceLite,
 } from "./types";
+import { cleanWidgets, defaultWidgets, type DashboardWidget } from "./widgets";
 
 /**
  * Every read goes through this file and takes the signed-in user's id, so a
@@ -394,20 +397,31 @@ export async function getItemDetail(
   };
 }
 
+/** How far back the dashboard looks at finished items (for the weekly charts). */
+export const DASHBOARD_WEEKS = 8;
+
 /**
- * Everything the home dashboard needs: open items, items finished in the
- * last two weeks, and the latest activity. Pass a workspace id to narrow it.
+ * Everything a dashboard needs: open items, items finished in the last
+ * DASHBOARD_WEEKS weeks, all-time progress per project, labels, the latest
+ * activity, and this person's widget layout. Pass a workspace id to narrow it.
  */
 export async function getDashboard(userId: string, workspaceId: string | null) {
   const mine = await getWorkspaceIds(userId);
   const scope = workspaceId ? mine.filter((id) => id === workspaceId) : mine;
+  const widgets = await getDashboardWidgets(userId, workspaceId);
   if (scope.length === 0) {
-    return { items: [] as DashboardItem[], activity: [] as DashboardActivity[] };
+    return {
+      items: [] as DashboardItem[],
+      activity: [] as DashboardActivity[],
+      projectCounts: [] as DashboardProjectCount[],
+      labels: [] as LabelLite[],
+      widgets,
+    };
   }
 
-  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const since = new Date(Date.now() - DASHBOARD_WEEKS * 7 * 24 * 60 * 60 * 1000);
 
-  const [rows, feed] = await Promise.all([
+  const [rows, feed, counts, labels] = await Promise.all([
     db
       .select({
         ...itemColumns,
@@ -417,6 +431,7 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
         statusName: status.name,
         statusColor: status.color,
         statusCategory: status.category,
+        statusPosition: status.position,
       })
       .from(item)
       .innerJoin(project, eq(project.id, item.projectId))
@@ -430,7 +445,7 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
         ),
       )
       .orderBy(asc(item.dueDate), asc(item.createdAt))
-      .limit(2000),
+      .limit(3000),
     db
       .select({
         id: activity.id,
@@ -453,10 +468,42 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
       .where(and(inArray(activity.workspaceId, scope), isNull(project.archivedAt)))
       .orderBy(desc(activity.createdAt))
       .limit(12),
+    db
+      .select({
+        projectId: item.projectId,
+        total: sql<number>`count(*)::int`,
+        done: sql<number>`count(${item.completedAt})::int`,
+      })
+      .from(item)
+      .innerJoin(project, eq(project.id, item.projectId))
+      .where(
+        and(inArray(item.workspaceId, scope), isNull(item.parentId), isNull(project.archivedAt)),
+      )
+      .groupBy(item.projectId),
+    db
+      .select({
+        id: label.id,
+        workspaceId: label.workspaceId,
+        name: label.name,
+        color: label.color,
+        position: label.position,
+      })
+      .from(label)
+      .where(inArray(label.workspaceId, scope))
+      .orderBy(asc(label.position), asc(label.createdAt)),
   ]);
 
   const items: DashboardItem[] = rows.map((r) => {
-    const { projectName, projectColor, projectKey, statusName, statusColor, statusCategory, ...rest } = r;
+    const {
+      projectName,
+      projectColor,
+      projectKey,
+      statusName,
+      statusColor,
+      statusCategory,
+      statusPosition,
+      ...rest
+    } = r;
     return {
       ...toItemLite(rest),
       projectName,
@@ -465,6 +512,7 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
       statusName,
       statusColor,
       statusCategory: statusCategory as StatusCategory,
+      statusPosition,
     };
   });
 
@@ -476,7 +524,19 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
     projectName: f.projectName,
   }));
 
-  return { items, activity: recent };
+  return { items, activity: recent, projectCounts: counts, labels, widgets };
+}
+
+/** The saved widget layout for a dashboard, or the default one. */
+export async function getDashboardWidgets(
+  userId: string,
+  workspaceId: string | null,
+): Promise<DashboardWidget[]> {
+  const [row] = await db
+    .select({ widgets: dashboard.widgets })
+    .from(dashboard)
+    .where(and(eq(dashboard.userId, userId), eq(dashboard.scope, workspaceId ?? "home")));
+  return (row && cleanWidgets(row.widgets)) ?? defaultWidgets();
 }
 
 export async function getNotifications(userId: string): Promise<NotificationEntry[]> {
