@@ -3,13 +3,24 @@ import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   activity,
+  apiToken,
+  automationRule,
+  githubHook,
+  dashboard,
   item,
+  itemLabel,
+  itemLink,
+  label,
   notification,
+  page,
+  template,
   project,
   status,
   user,
   workspace,
   workspaceMember,
+  type DashboardWidget,
+  type ItemTemplateData,
   type Recurrence,
 } from "@/db/schema";
 import {
@@ -20,6 +31,7 @@ import {
   nextOccurrence,
 } from "./dates";
 import { newId } from "./id";
+import type { RuleInput } from "./automation-types";
 import { getTemplate } from "./templates";
 import type { Priority } from "./types";
 import { projectKey } from "./utils";
@@ -30,6 +42,19 @@ import { projectKey } from "./utils";
  */
 
 export class MutationError extends Error {}
+
+/**
+ * Who is making a change. `via` names the automation rule acting for them, so
+ * the item's activity says "Automation “…”" instead of the person's name.
+ * `by` replaces the name shown in the activity, for changes that arrive
+ * through an API token ("Alex via Luna") or an integration ("GitHub").
+ */
+export type Actor = { id: string; name: string; via?: string; by?: string };
+
+const viaData = (actor: { via?: string; by?: string }): Record<string, string> => ({
+  ...(actor.via ? { via: actor.via } : {}),
+  ...(actor.by ? { by: actor.by } : {}),
+});
 
 async function requireRole(userId: string, workspaceId: string) {
   const [row] = await db
@@ -293,6 +318,9 @@ type NewItem = {
   description?: string;
   recurrence?: Recurrence | null;
   source?: string;
+  labelIds?: string[];
+  /** Shown in the activity instead of the person's name, e.g. "Alex via Luna". */
+  by?: string;
 };
 
 /**
@@ -319,6 +347,9 @@ export async function insertItem(actorId: string | null, input: NewItem) {
     if (parent.projectId !== proj.id) throw new MutationError("Wrong project.");
   }
   if (input.assigneeId) await requireMember(input.assigneeId, proj.workspaceId);
+  const labelIds = input.labelIds?.length
+    ? await workspaceLabelIds(proj.workspaceId, input.labelIds)
+    : [];
 
   const id = input.id ?? newId();
   await db.transaction(async (tx) => {
@@ -364,7 +395,11 @@ export async function insertItem(actorId: string | null, input: NewItem) {
       workspaceId: proj.workspaceId,
       userId: actorId,
       type: "created",
+      data: input.by ? { by: input.by } : null,
     });
+    if (labelIds.length) {
+      await tx.insert(itemLabel).values(labelIds.map((labelId) => ({ itemId: id, labelId })));
+    }
   });
 
   return { id, project: proj };
@@ -386,7 +421,7 @@ type ActivityRow = typeof activity.$inferInsert;
 
 /** Applies a change to an item and records what changed in its feed. */
 export async function patchItem(
-  actor: { id: string; name: string },
+  actor: Actor,
   itemId: string,
   patch: ItemPatch,
   today: string,
@@ -404,7 +439,7 @@ export async function patchItem(
       workspaceId: current.workspaceId,
       userId: actor.id,
       type,
-      data,
+      data: { ...data, ...viaData(actor) },
     });
 
   let justCompleted = false;
@@ -474,7 +509,9 @@ export async function patchItem(
     }
   }
 
-  if (Object.keys(set).length === 0) return { spawnedId: null as string | null };
+  if (Object.keys(set).length === 0) {
+    return { spawnedId: null as string | null, changed: [] as string[] };
+  }
 
   const merged = { ...current, ...set };
   let spawnedId: string | null = null;
@@ -540,6 +577,16 @@ export async function patchItem(
         type: "created",
         data: { recurring: describeRecurrence(rec) },
       });
+      // The next copy keeps the same labels.
+      const labels = await tx
+        .select({ labelId: itemLabel.labelId })
+        .from(itemLabel)
+        .where(eq(itemLabel.itemId, itemId));
+      if (labels.length) {
+        await tx
+          .insert(itemLabel)
+          .values(labels.map((l) => ({ itemId: spawnedId!, labelId: l.labelId })));
+      }
       await tx.insert(notification).values({
         id: newId(),
         userId: merged.assigneeId ?? actor.id,
@@ -567,7 +614,77 @@ export async function patchItem(
     }
   });
 
-  return { spawnedId };
+  return { spawnedId, changed: Object.keys(set) };
+}
+
+/**
+ * Moves an item (and its subtasks) to another project in the same workspace.
+ * Each one keeps a status with the same name, or the first one of the same
+ * kind, and gets a new number in the new project.
+ */
+export async function moveItemToProject(
+  actor: { id: string; via?: string },
+  itemId: string,
+  projectId: string,
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  if (current.parentId) throw new MutationError("Move the parent item instead.");
+  if (current.projectId === projectId) return;
+  const [from, to] = await Promise.all([loadProject(current.projectId), loadProject(projectId)]);
+  if (to.workspaceId !== current.workspaceId) {
+    throw new MutationError("Items can only move to a project in the same workspace.");
+  }
+  if (to.archivedAt) throw new MutationError("That project is archived.");
+
+  const [oldStatuses, newStatuses] = await Promise.all([
+    db.select().from(status).where(eq(status.projectId, from.id)),
+    db.select().from(status).where(eq(status.projectId, to.id)).orderBy(asc(status.position)),
+  ]);
+  if (newStatuses.length === 0) throw new MutationError("That project has no statuses.");
+  const mapStatus = (statusId: string) => {
+    const old = oldStatuses.find((s) => s.id === statusId);
+    const name = old?.name.trim().toLowerCase();
+    return (
+      newStatuses.find((s) => s.name.trim().toLowerCase() === name) ??
+      newStatuses.find((s) => s.category === old?.category) ??
+      newStatuses[0]
+    );
+  };
+
+  const subtasks = await db.select().from(item).where(eq(item.parentId, itemId));
+
+  await db.transaction(async (tx) => {
+    for (const row of [current, ...subtasks]) {
+      const [{ number }] = await tx
+        .update(project)
+        .set({ itemSeq: sql`${project.itemSeq} + 1` })
+        .where(eq(project.id, to.id))
+        .returning({ number: project.itemSeq });
+      const next = mapStatus(row.statusId);
+      await tx
+        .update(item)
+        .set({
+          projectId: to.id,
+          number,
+          statusId: next.id,
+          completedAt:
+            next.category === "done" ? (row.completedAt ?? new Date()) : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(item.id, row.id));
+      await tx.update(activity).set({ projectId: to.id }).where(eq(activity.itemId, row.id));
+    }
+    await tx.insert(activity).values({
+      id: newId(),
+      itemId,
+      projectId: to.id,
+      workspaceId: current.workspaceId,
+      userId: actor.id,
+      type: "moved",
+      data: { from: from.name, to: to.name, ...viaData(actor) },
+    });
+  });
 }
 
 export async function removeItem(userId: string, itemId: string) {
@@ -577,7 +694,7 @@ export async function removeItem(userId: string, itemId: string) {
 }
 
 export async function addComment(
-  actor: { id: string; name: string },
+  actor: Actor,
   itemId: string,
   body: string,
 ) {
@@ -593,6 +710,7 @@ export async function addComment(
       userId: actor.id,
       type: "comment",
       body,
+      data: actor.via || actor.by ? viaData(actor) : null,
     });
     await tx.update(item).set({ updatedAt: new Date() }).where(eq(item.id, itemId));
 
@@ -618,6 +736,281 @@ export async function addComment(
     }
   });
   return id;
+}
+
+// -------------------------------------------------------------------- labels
+
+/** Keeps only the ids that are labels in this workspace. */
+async function workspaceLabelIds(workspaceId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({ id: label.id })
+    .from(label)
+    .where(and(eq(label.workspaceId, workspaceId), inArray(label.id, ids)));
+  return rows.map((r) => r.id);
+}
+
+async function loadLabel(labelId: string) {
+  const [row] = await db.select().from(label).where(eq(label.id, labelId));
+  if (!row) throw new MutationError("That label no longer exists.");
+  return row;
+}
+
+export async function createLabel(
+  userId: string,
+  input: { id: string; workspaceId: string; name: string; color: string },
+) {
+  await requireRole(userId, input.workspaceId);
+  const [{ next }] = await db
+    .select({ next: sql<number>`coalesce(max(${label.position}), -1) + 1` })
+    .from(label)
+    .where(eq(label.workspaceId, input.workspaceId));
+  await db.insert(label).values({ ...input, position: next });
+}
+
+export async function updateLabel(
+  userId: string,
+  labelId: string,
+  patch: { name?: string; color?: string },
+) {
+  const row = await loadLabel(labelId);
+  await requireRole(userId, row.workspaceId);
+  await db.update(label).set(patch).where(eq(label.id, labelId));
+}
+
+export async function deleteLabel(userId: string, labelId: string) {
+  const [row] = await db.select().from(label).where(eq(label.id, labelId));
+  if (!row) return;
+  await requireRole(userId, row.workspaceId);
+  await db.delete(label).where(eq(label.id, labelId));
+}
+
+/** Replaces an item's labels and records what was added and removed. */
+export async function setItemLabels(
+  actor: { id: string; via?: string },
+  itemId: string,
+  labelIds: string[],
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const wanted = await workspaceLabelIds(current.workspaceId, [...new Set(labelIds)]);
+
+  const existing = await db
+    .select({ labelId: itemLabel.labelId })
+    .from(itemLabel)
+    .where(eq(itemLabel.itemId, itemId));
+  const had = new Set(existing.map((e) => e.labelId));
+  const added = wanted.filter((id) => !had.has(id));
+  const removed = [...had].filter((id) => !wanted.includes(id));
+  if (added.length === 0 && removed.length === 0) return { added: [] as string[] };
+
+  const names = await db
+    .select({ id: label.id, name: label.name })
+    .from(label)
+    .where(inArray(label.id, [...added, ...removed]));
+  const nameOf = (id: string) => names.find((n) => n.id === id)?.name ?? "label";
+
+  await db.transaction(async (tx) => {
+    if (removed.length) {
+      await tx
+        .delete(itemLabel)
+        .where(and(eq(itemLabel.itemId, itemId), inArray(itemLabel.labelId, removed)));
+    }
+    if (added.length) {
+      await tx.insert(itemLabel).values(added.map((labelId) => ({ itemId, labelId })));
+    }
+    await tx.update(item).set({ updatedAt: new Date() }).where(eq(item.id, itemId));
+    await tx.insert(activity).values({
+      id: newId(),
+      itemId,
+      projectId: current.projectId,
+      workspaceId: current.workspaceId,
+      userId: actor.id,
+      type: "labels",
+      data: {
+        added: added.length ? added.map(nameOf).join(", ") : null,
+        removed: removed.length ? removed.map(nameOf).join(", ") : null,
+        ...viaData(actor),
+      },
+    });
+  });
+  return { added };
+}
+
+// --------------------------------------------------------------------- links
+
+export async function addItemLink(
+  actor: { id: string },
+  itemId: string,
+  input: { id: string; url: string; title: string },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(itemLink)
+    .where(eq(itemLink.itemId, itemId));
+  if (n >= 50) throw new MutationError("An item can hold up to 50 links.");
+  await db.insert(itemLink).values({
+    ...input,
+    itemId,
+    workspaceId: current.workspaceId,
+    createdBy: actor.id,
+  });
+}
+
+export async function removeItemLink(actor: { id: string }, linkId: string) {
+  const [row] = await db.select().from(itemLink).where(eq(itemLink.id, linkId));
+  if (!row) return;
+  await requireRole(actor.id, row.workspaceId);
+  await db.delete(itemLink).where(eq(itemLink.id, linkId));
+}
+
+// --------------------------------------------------------------------- pages
+
+async function loadPage(pageId: string) {
+  const [row] = await db.select().from(page).where(eq(page.id, pageId));
+  if (!row) throw new MutationError("That page no longer exists.");
+  return row;
+}
+
+export async function createPage(
+  actor: { id: string },
+  input: { id: string; projectId: string; title: string; body: string },
+) {
+  const proj = await loadProject(input.projectId);
+  await requireRole(actor.id, proj.workspaceId);
+  const [{ next }] = await db
+    .select({ next: sql<number>`coalesce(max(${page.position}), 0) + 1` })
+    .from(page)
+    .where(eq(page.projectId, proj.id));
+  await db.insert(page).values({
+    ...input,
+    workspaceId: proj.workspaceId,
+    position: next,
+    createdBy: actor.id,
+    updatedBy: actor.id,
+  });
+}
+
+export async function updatePage(
+  actor: { id: string },
+  pageId: string,
+  patch: { title?: string; body?: string },
+) {
+  const row = await loadPage(pageId);
+  await requireRole(actor.id, row.workspaceId);
+  await db
+    .update(page)
+    .set({ ...patch, updatedBy: actor.id, updatedAt: new Date() })
+    .where(eq(page.id, pageId));
+}
+
+export async function deletePage(actor: { id: string }, pageId: string) {
+  const [row] = await db.select().from(page).where(eq(page.id, pageId));
+  if (!row) return;
+  await requireRole(actor.id, row.workspaceId);
+  await db.delete(page).where(eq(page.id, pageId));
+}
+
+// ----------------------------------------------------------------- templates
+
+export async function createTemplate(
+  actor: { id: string },
+  input: {
+    id: string;
+    workspaceId: string;
+    kind: "page" | "item";
+    name: string;
+    title: string;
+    body: string;
+    data?: ItemTemplateData | null;
+  },
+) {
+  await requireRole(actor.id, input.workspaceId);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(template)
+    .where(eq(template.workspaceId, input.workspaceId));
+  if (n >= 200) throw new MutationError("This workspace has the most templates it can hold.");
+  await db.insert(template).values({ ...input, data: input.data ?? null, createdBy: actor.id });
+}
+
+export async function deleteTemplate(actor: { id: string }, templateId: string) {
+  const [row] = await db.select().from(template).where(eq(template.id, templateId));
+  if (!row) return;
+  await requireRole(actor.id, row.workspaceId);
+  await db.delete(template).where(eq(template.id, templateId));
+}
+
+/** Saves an item's title, description, priority, labels and subtasks as a template. */
+export async function saveItemAsTemplate(
+  actor: { id: string },
+  itemId: string,
+  input: { id: string; name: string },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const [subs, labels] = await Promise.all([
+    db
+      .select({ title: item.title })
+      .from(item)
+      .where(eq(item.parentId, itemId))
+      .orderBy(asc(item.position), asc(item.createdAt)),
+    db.select({ labelId: itemLabel.labelId }).from(itemLabel).where(eq(itemLabel.itemId, itemId)),
+  ]);
+  await createTemplate(actor, {
+    id: input.id,
+    workspaceId: current.workspaceId,
+    kind: "item",
+    name: input.name,
+    title: current.title,
+    body: current.description,
+    data: {
+      priority: current.priority,
+      labelIds: labels.map((l) => l.labelId),
+      subtasks: subs.map((s) => s.title).slice(0, 50),
+      dueIn: null,
+    },
+  });
+}
+
+/** Makes a new item, with its subtasks, from an item template. */
+export async function createItemFromTemplate(
+  actor: { id: string },
+  input: { id: string; projectId: string; templateId: string; statusId?: string | null; today: string },
+) {
+  const proj = await loadProject(input.projectId);
+  await requireRole(actor.id, proj.workspaceId);
+  const [tpl] = await db
+    .select()
+    .from(template)
+    .where(and(eq(template.id, input.templateId), eq(template.workspaceId, proj.workspaceId)));
+  if (!tpl || tpl.kind !== "item") throw new MutationError("That template no longer exists.");
+  const data = tpl.data ?? {};
+  const priority = (["none", "low", "medium", "high", "urgent"] as const).find(
+    (p) => p === data.priority,
+  );
+  await insertItem(actor.id, {
+    id: input.id,
+    projectId: proj.id,
+    title: tpl.title || tpl.name,
+    description: tpl.body,
+    statusId: input.statusId ?? null,
+    priority: priority ?? "none",
+    labelIds: data.labelIds ?? [],
+    dueDate:
+      typeof data.dueIn === "number" ? addDaysTo(input.today, data.dueIn) : null,
+    source: "template",
+  });
+  for (const title of data.subtasks ?? []) {
+    await insertItem(actor.id, {
+      projectId: proj.id,
+      title: title.slice(0, 300),
+      parentId: input.id,
+      source: "template",
+    });
+  }
 }
 
 // ------------------------------------------------------------- notifications
@@ -685,4 +1078,284 @@ export async function createItemFromEmail(
   });
 
   return { id, projectId: proj.id };
+}
+
+// ---------------------------------------------------------------- dashboards
+
+/** Saves someone's widget layout for the home dashboard (null) or a workspace's. */
+export async function saveDashboard(
+  actor: { id: string },
+  workspaceId: string | null,
+  widgets: DashboardWidget[],
+) {
+  if (workspaceId) await requireRole(actor.id, workspaceId);
+  const scope = workspaceId ?? "home";
+  await db
+    .insert(dashboard)
+    .values({ userId: actor.id, scope, widgets })
+    .onConflictDoUpdate({
+      target: [dashboard.userId, dashboard.scope],
+      set: { widgets, updatedAt: new Date() },
+    });
+}
+
+/** Goes back to the default layout. */
+export async function resetDashboard(actor: { id: string }, workspaceId: string | null) {
+  await db
+    .delete(dashboard)
+    .where(and(eq(dashboard.userId, actor.id), eq(dashboard.scope, workspaceId ?? "home")));
+}
+
+// --------------------------------------------------------------- automations
+
+const MAX_RULES = 100;
+
+/** Rules may only point at labels, projects and people in their own workspace. */
+async function checkRuleTargets(workspaceId: string, rule: RuleInput) {
+  const projectIds = [
+    ...(rule.projectId ? [rule.projectId] : []),
+    ...rule.actions.flatMap((a) => (a.type === "move_project" ? [a.projectId] : [])),
+  ];
+  const labelIds = [
+    ...rule.actions.flatMap((a) =>
+      a.type === "add_label" || a.type === "remove_label" ? [a.labelId] : [],
+    ),
+    ...rule.conditions.flatMap((c) => (c.field === "label" ? [c.value] : [])),
+    ...(rule.trigger.type === "label_added" && rule.trigger.labelId ? [rule.trigger.labelId] : []),
+  ];
+  const people = rule.actions.flatMap((a) =>
+    a.type === "assign" && a.to && a.to !== "creator" ? [a.to] : [],
+  );
+  if (projectIds.length) {
+    const unique = [...new Set(projectIds)];
+    const found = await db
+      .select({ id: project.id })
+      .from(project)
+      .where(and(eq(project.workspaceId, workspaceId), inArray(project.id, unique)));
+    if (found.length !== unique.length) {
+      throw new MutationError("That project isn't in this workspace.");
+    }
+  }
+  if (labelIds.length) {
+    const unique = [...new Set(labelIds)];
+    if ((await workspaceLabelIds(workspaceId, unique)).length !== unique.length) {
+      throw new MutationError("One of those labels isn't in this workspace.");
+    }
+  }
+  for (const person of new Set(people)) await requireMember(person, workspaceId);
+}
+
+export async function createRule(
+  actor: { id: string },
+  input: { id: string; workspaceId: string } & RuleInput,
+) {
+  await requireRole(actor.id, input.workspaceId);
+  await checkRuleTargets(input.workspaceId, input);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(automationRule)
+    .where(eq(automationRule.workspaceId, input.workspaceId));
+  if (n >= MAX_RULES) throw new MutationError(`A workspace can have up to ${MAX_RULES} rules.`);
+  await db.insert(automationRule).values({
+    id: input.id,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    name: input.name,
+    enabled: input.enabled,
+    trigger: input.trigger,
+    conditions: input.conditions,
+    actions: input.actions,
+    position: n,
+    createdBy: actor.id,
+  });
+}
+
+async function loadRule(ruleId: string) {
+  const [row] = await db.select().from(automationRule).where(eq(automationRule.id, ruleId));
+  if (!row) throw new MutationError("That rule no longer exists.");
+  return row;
+}
+
+/**
+ * Saves changes to a rule. Whoever saves it becomes the person it acts for,
+ * so a rule never acts with the access of someone who didn't set it up.
+ */
+export async function updateRule(actor: { id: string }, ruleId: string, input: RuleInput) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  await checkRuleTargets(rule.workspaceId, input);
+  await db
+    .update(automationRule)
+    .set({
+      projectId: input.projectId,
+      name: input.name,
+      enabled: input.enabled,
+      trigger: input.trigger,
+      conditions: input.conditions,
+      actions: input.actions,
+      createdBy: actor.id,
+      updatedAt: new Date(),
+    })
+    .where(eq(automationRule.id, ruleId));
+}
+
+export async function setRuleEnabled(actor: { id: string }, ruleId: string, enabled: boolean) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  await db
+    .update(automationRule)
+    .set({ enabled, updatedAt: new Date() })
+    .where(eq(automationRule.id, ruleId));
+}
+
+export async function deleteRule(actor: { id: string }, ruleId: string) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  await db.delete(automationRule).where(eq(automationRule.id, ruleId));
+}
+
+/** Checks access before a test run or reading a rule's log. */
+export async function requireRuleAccess(actor: { id: string }, ruleId: string) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  return rule;
+}
+
+// -------------------------------------------------------------- integrations
+
+const MAX_TOKENS = 20;
+const MAX_HOOKS = 10;
+
+/**
+ * Saves a new API token. Only its hash is kept; the caller shows the token
+ * once. `workspaceIds` null means every workspace the person is in, now and
+ * later; a list keeps the token to those workspaces.
+ */
+export async function createApiToken(
+  actor: { id: string },
+  input: { id: string; name: string; hash: string; prefix: string; workspaceIds: string[] | null },
+) {
+  if (input.workspaceIds) {
+    if (input.workspaceIds.length === 0) {
+      throw new MutationError("Pick at least one workspace for this token.");
+    }
+    for (const ws of new Set(input.workspaceIds)) await requireRole(actor.id, ws);
+  }
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(apiToken)
+    .where(eq(apiToken.userId, actor.id));
+  if (n >= MAX_TOKENS) throw new MutationError(`You can have up to ${MAX_TOKENS} tokens.`);
+  await db.insert(apiToken).values({
+    id: input.id,
+    userId: actor.id,
+    name: input.name,
+    tokenHash: input.hash,
+    prefix: input.prefix,
+    workspaceIds: input.workspaceIds ? [...new Set(input.workspaceIds)] : null,
+  });
+}
+
+export async function revokeApiToken(actor: { id: string }, tokenId: string) {
+  await db.delete(apiToken).where(and(eq(apiToken.id, tokenId), eq(apiToken.userId, actor.id)));
+}
+
+async function loadHook(hookId: string) {
+  const [row] = await db.select().from(githubHook).where(eq(githubHook.id, hookId));
+  if (!row) throw new MutationError("That webhook no longer exists.");
+  return row;
+}
+
+export async function createGithubHook(
+  actor: { id: string },
+  input: { id: string; workspaceId: string; secret: string; onMerge: "done" | "none" },
+) {
+  await requireRole(actor.id, input.workspaceId);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(githubHook)
+    .where(eq(githubHook.workspaceId, input.workspaceId));
+  if (n >= MAX_HOOKS) throw new MutationError(`A workspace can have up to ${MAX_HOOKS} webhooks.`);
+  await db.insert(githubHook).values({ ...input, createdBy: actor.id });
+}
+
+/**
+ * Changes a webhook. Whoever saves it becomes the person it acts for, as
+ * with automation rules.
+ */
+export async function updateGithubHook(
+  actor: { id: string },
+  hookId: string,
+  patch: { onMerge?: "done" | "none"; secret?: string },
+) {
+  const hook = await loadHook(hookId);
+  await requireRole(actor.id, hook.workspaceId);
+  await db
+    .update(githubHook)
+    .set({ ...patch, createdBy: actor.id })
+    .where(eq(githubHook.id, hookId));
+}
+
+export async function deleteGithubHook(actor: { id: string }, hookId: string) {
+  const hook = await loadHook(hookId);
+  await requireRole(actor.id, hook.workspaceId);
+  await db.delete(githubHook).where(eq(githubHook.id, hookId));
+}
+
+/**
+ * Links a pull request to an item and notes it in the item's feed. Returns
+ * false when the item already had this link, so a PR edit doesn't repeat it.
+ */
+export async function linkPullRequest(
+  actor: Actor,
+  itemId: string,
+  pr: { url: string; title: string; number: number },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const [existing] = await db
+    .select({ id: itemLink.id })
+    .from(itemLink)
+    .where(and(eq(itemLink.itemId, itemId), eq(itemLink.url, pr.url)));
+  if (existing) return false;
+  const title = `#${pr.number} ${pr.title}`.slice(0, 200);
+  await db.transaction(async (tx) => {
+    await tx.insert(itemLink).values({
+      id: newId(),
+      itemId,
+      workspaceId: current.workspaceId,
+      url: pr.url,
+      title,
+      createdBy: actor.id,
+    });
+    await tx.insert(activity).values({
+      id: newId(),
+      itemId,
+      projectId: current.projectId,
+      workspaceId: current.workspaceId,
+      userId: actor.id,
+      type: "github",
+      data: { action: "linked", pr: `#${pr.number}`, title: pr.title.slice(0, 200), ...viaData(actor) },
+    });
+  });
+  return true;
+}
+
+/** Notes a merged pull request in the item's feed. */
+export async function noteMergedPullRequest(
+  actor: Actor,
+  itemId: string,
+  pr: { title: string; number: number },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  await db.insert(activity).values({
+    id: newId(),
+    itemId,
+    projectId: current.projectId,
+    workspaceId: current.workspaceId,
+    userId: actor.id,
+    type: "github",
+    data: { action: "merged", pr: `#${pr.number}`, title: pr.title.slice(0, 200), ...viaData(actor) },
+  });
 }

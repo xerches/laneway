@@ -1,3 +1,5 @@
+import { fireAutomations } from "@/lib/automations";
+import { todayString } from "@/lib/dates";
 import { createItemFromEmail } from "@/lib/mutations";
 
 /**
@@ -74,5 +76,6 @@ export async function POST(
     text,
   });
   if (!created) return Response.json({ error: "Unknown address" }, { status: 404 });
+  await fireAutomations([{ type: "item_created", itemId: created.id }], todayString());
   return Response.json({ ok: true, itemId: created.id });
 }

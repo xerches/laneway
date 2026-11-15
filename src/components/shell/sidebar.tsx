@@ -1,9 +1,22 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Home, Inbox, LogOut, MoreHorizontal, Plus, Search } from "lucide-react";
+import {
+  CalendarCheck,
+  ChevronRight,
+  Folder,
+  FolderOpen,
+  Home,
+  Inbox,
+  LogOut,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Settings,
+  Zap,
+} from "lucide-react";
 import { ThemeSwitch } from "@/components/theme";
 import { toast } from "sonner";
 import { createWorkspace, updateWorkspace } from "@/actions";
@@ -21,7 +34,7 @@ import {
   MenuTrigger,
 } from "@/components/ui/overlays";
 import { authClient } from "@/lib/auth-client";
-import { colorFg, colorVar, randomColor } from "@/lib/colors";
+import { colorVar, randomColor } from "@/lib/colors";
 import type { WorkspaceLite } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useApp } from "./app-context";
@@ -35,6 +48,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [editing, setEditing] = useState<WorkspaceLite | "new" | null>(null);
+  const [collapsed, setCollapsed] = useCollapsed();
 
   async function signOut() {
     await authClient.signOut();
@@ -66,6 +80,10 @@ export function Sidebar() {
           <Home size={15} />
           Home
         </Link>
+        <Link href="/week" className={cn(navItem, pathname === "/week" && navActive)}>
+          <CalendarCheck size={15} />
+          My week
+        </Link>
         <Link href="/inbox" className={cn(navItem, pathname === "/inbox" && navActive)}>
           <Inbox size={15} />
           <span className="flex-1">Inbox</span>
@@ -79,23 +97,38 @@ export function Sidebar() {
         {workspaces.map((ws) => {
           const mine = projects.filter((p) => p.workspaceId === ws.id);
           const wsPath = `/w/${ws.id}`;
+          const open = !collapsed.includes(ws.id);
+          const FolderIcon = open ? FolderOpen : Folder;
           return (
-            <section key={ws.id} className="mt-4">
-              <div className="group flex h-8 items-center gap-1 rounded-md pr-1 hover:bg-surface-2">
+            <section key={ws.id} className="mt-3">
+              <div className="group flex h-8 items-center gap-0.5 rounded-md pr-1 hover:bg-surface-2">
+                <button
+                  onClick={() =>
+                    setCollapsed(open ? [...collapsed, ws.id] : collapsed.filter((id) => id !== ws.id))
+                  }
+                  aria-expanded={open}
+                  aria-label={`${open ? "Collapse" : "Expand"} ${ws.name}`}
+                  className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-faint hover:text-ink"
+                >
+                  <ChevronRight
+                    size={13}
+                    className={cn("transition-transform", open && "rotate-90")}
+                  />
+                </button>
                 <Link
                   href={wsPath}
                   className={cn(
-                    "flex min-w-0 flex-1 items-center gap-2 px-2 text-[13px] font-semibold",
+                    "flex min-w-0 flex-1 items-center gap-2 pr-1 text-[13px] font-semibold",
                     pathname === wsPath ? "text-ink" : "text-ink/85",
                   )}
                 >
-                  <span
-                    style={{ background: colorVar(ws.color), color: colorFg(ws.color) }}
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-bold"
-                  >
-                    {ws.name.slice(0, 1).toUpperCase()}
-                  </span>
+                  <FolderIcon
+                    size={16}
+                    style={{ color: colorVar(ws.color), fill: `color-mix(in oklab, ${colorVar(ws.color)} 22%, transparent)` }}
+                    className="shrink-0"
+                  />
                   <span className="truncate">{ws.name}</span>
+                  <span className="text-[11px] font-normal text-faint tabular-nums">{mine.length}</span>
                 </Link>
                 <Menu>
                   <MenuTrigger
@@ -107,6 +140,9 @@ export function Sidebar() {
                   <MenuContent>
                     <MenuItem onSelect={() => setEditing(ws)}>Rename or recolor</MenuItem>
                     <MenuItem onSelect={() => openNewProject(ws.id)}>New project</MenuItem>
+                    <MenuItem onSelect={() => router.push(`/w/${ws.id}/automations`)}>
+                      <Zap size={14} /> Automations
+                    </MenuItem>
                   </MenuContent>
                 </Menu>
                 <button
@@ -118,14 +154,17 @@ export function Sidebar() {
                 </button>
               </div>
 
-              <div className="mt-0.5 flex flex-col">
+              <div
+                hidden={!open}
+                className="mt-0.5 ml-[18px] flex flex-col border-l border-line pl-1.5"
+              >
                 {mine.map((p) => {
                   const href = `/w/${ws.id}/p/${p.id}`;
                   return (
                     <Link
                       key={p.id}
                       href={href}
-                      className={cn(navItem, "pl-3.5", pathname === href && navActive)}
+                      className={cn(navItem, "pl-2", pathname === href && navActive)}
                     >
                       <Dot color={p.color} />
                       <span className="truncate">{p.name}</span>
@@ -135,7 +174,7 @@ export function Sidebar() {
                 {mine.length === 0 ? (
                   <button
                     onClick={() => openNewProject(ws.id)}
-                    className={cn(navItem, "pl-3.5 text-faint")}
+                    className={cn(navItem, "pl-2 text-faint")}
                   >
                     <Plus size={13} />
                     New project
@@ -161,6 +200,17 @@ export function Sidebar() {
           <p className="truncate text-[13px] font-medium">{user.name}</p>
           <p className="truncate text-[11px] text-faint">{user.email}</p>
         </div>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings: API tokens, Claude and GitHub"
+          className={cn(
+            "rounded-md p-1.5 text-faint hover:bg-surface-2 hover:text-ink",
+            pathname === "/settings" && "bg-surface-2 text-ink",
+          )}
+        >
+          <Settings size={15} />
+        </Link>
         <button
           onClick={signOut}
           aria-label="Sign out"
@@ -257,4 +307,45 @@ function WorkspaceForm({
       </div>
     </form>
   );
+}
+
+const COLLAPSED_KEY = "laneway:collapsed-workspaces";
+
+/** Which workspace folders are closed, remembered in this browser. */
+function useCollapsed(): [string[], (ids: string[]) => void] {
+  const raw = useSyncExternalStore(subscribeCollapsed, readCollapsed, () => "[]");
+  const ids = useMemo(() => {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
+    }
+  }, [raw]);
+  function update(next: string[]) {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
+    } catch {
+      // Storage can be unavailable; folders then just stay as they are.
+    }
+    window.dispatchEvent(new Event(COLLAPSED_KEY));
+  }
+  return [ids, update];
+}
+
+function readCollapsed(): string {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) ?? "[]";
+  } catch {
+    return "[]";
+  }
+}
+
+function subscribeCollapsed(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(COLLAPSED_KEY, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(COLLAPSED_KEY, onChange);
+  };
 }
