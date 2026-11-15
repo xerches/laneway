@@ -1,14 +1,25 @@
 "use client";
 
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { format, parseISO, startOfWeek } from "date-fns";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, ListChecks, Link2, MessageSquare } from "lucide-react";
+import * as actions from "@/actions";
+import { Avatar, Pill } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
 import { colorFg, colorVar } from "@/lib/colors";
 import { addDaysTo, daysBetween, formatShort, toDateString } from "@/lib/dates";
-import type { ItemLite } from "@/lib/types";
+import { linkLabel } from "@/lib/links";
+import type { ItemDetail, ItemLite } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { LabelChips } from "./labels";
+import { PriorityIcon, priorityMeta } from "./pickers";
 import { useProject } from "./store";
 
 type Zoom = "weeks" | "months";
@@ -45,6 +56,9 @@ export function TimelineView({ onOpen }: { onOpen: (id: string) => void }) {
   const [zoom, setZoom] = useState<Zoom>("weeks");
   const [from, setFrom] = useState(() => addDaysTo(mondayOf(today), -7));
   const [preview, setPreview] = useState<{ id: string; span: Span } | null>(null);
+  const [expanded, setExpanded] = useState<string[]>([]);
+  const toggle = (id: string) =>
+    setExpanded((prev) => (prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]));
   const drag = useRef<{
     id: string;
     mode: Mode;
@@ -228,8 +242,8 @@ export function TimelineView({ onOpen }: { onOpen: (id: string) => void }) {
             {/* Weekend shading and the today line, behind the bars */}
             <div
               aria-hidden
-              style={{ left: SIDE, width, height: Math.max(scheduled.length, 1) * ROW }}
-              className="pointer-events-none absolute top-0"
+              style={{ left: SIDE, width }}
+              className="pointer-events-none absolute inset-y-0"
             >
               {dayList.map((day, i) => {
                 const weekday = parseISO(day).getDay();
@@ -270,13 +284,24 @@ export function TimelineView({ onOpen }: { onOpen: (id: string) => void }) {
               const done = Boolean(item.completedAt);
               const outside = span.end < from || span.start > to;
               const label = item.title;
+              const isOpen = expanded.includes(item.id);
               return (
-                <div key={item.id} className="group flex border-b border-line/60" style={{ height: ROW }}>
+                <Fragment key={item.id}>
+                <div className="group flex border-b border-line/60" style={{ height: ROW }}>
                   <button
-                    onClick={() => onOpen(item.id)}
+                    onClick={() => toggle(item.id)}
+                    aria-expanded={isOpen}
+                    title={isOpen ? "Hide details" : "Show details"}
                     style={{ width: SIDE }}
-                    className="sticky left-0 z-10 flex shrink-0 items-center gap-2 border-r border-line bg-surface px-3 text-left hover:bg-surface-2"
+                    className={cn(
+                      "sticky left-0 z-10 flex shrink-0 items-center gap-2 border-r border-line bg-surface pr-3 pl-1.5 text-left hover:bg-surface-2",
+                      isOpen && "bg-surface-2",
+                    )}
                   >
+                    <ChevronRight
+                      size={13}
+                      className={cn("shrink-0 text-faint transition-transform", isOpen && "rotate-90")}
+                    />
                     <span className="text-[11px] text-faint tabular-nums">
                       {item.number > 0 ? `${project.key}-${item.number}` : ""}
                     </span>
@@ -350,6 +375,17 @@ export function TimelineView({ onOpen }: { onOpen: (id: string) => void }) {
                     )}
                   </div>
                 </div>
+                {isOpen ? (
+                  <div className="border-b border-line/60 bg-surface-2/40">
+                    <div
+                      style={{ width: `min(${SIDE + width}px, 100%)`, maxWidth: SIDE + 640 }}
+                      className="sticky left-0 z-10"
+                    >
+                      <TimelineDetail item={item} span={span} onOpen={() => onOpen(item.id)} />
+                    </div>
+                  </div>
+                ) : null}
+                </Fragment>
               );
             })}
           </div>
@@ -378,6 +414,118 @@ export function TimelineView({ onOpen }: { onOpen: (id: string) => void }) {
           </ul>
         </details>
       ) : null}
+    </div>
+  );
+}
+
+/** The drop-down under a timeline row: the item's details at a glance. */
+function TimelineDetail({
+  item,
+  span,
+  onOpen,
+}: {
+  item: ItemLite;
+  span: Span;
+  onOpen: () => void;
+}) {
+  const { statuses, members, labels, version } = useProject();
+  const [detail, setDetail] = useState<ItemDetail | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    actions.loadItemDetail(item.id).then((loaded) => {
+      if (!cancelled) setDetail(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, version]);
+
+  const status = statuses.find((s) => s.id === item.statusId);
+  const owner = members.find((m) => m.id === item.assigneeId);
+  const length = daysBetween(span.start, span.end) + 1;
+  const subtasks = detail?.subtasks ?? [];
+  const description = detail?.description.trim() ?? "";
+
+  return (
+    <div className="flex flex-col gap-3 px-4 py-3 pl-8 text-[13px]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        {status ? <Pill color={status.color}>{status.name}</Pill> : null}
+        <span className="flex items-center gap-1.5 text-muted">
+          <PriorityIcon value={item.priority} />
+          {priorityMeta(item.priority).label}
+        </span>
+        <span className="text-muted">
+          {formatShort(span.start)}
+          {span.start !== span.end ? ` → ${formatShort(span.end)}` : ""}
+          <span className="ml-1.5 text-faint">
+            {length} day{length === 1 ? "" : "s"}
+          </span>
+        </span>
+        {owner ? (
+          <span className="flex items-center gap-1.5 text-muted">
+            <Avatar name={owner.name} id={owner.id} size={18} />
+            {owner.name}
+          </span>
+        ) : null}
+        {item.commentCount > 0 ? (
+          <span className="flex items-center gap-1 text-muted">
+            <MessageSquare size={13} /> {item.commentCount}
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        <Button size="sm" onClick={onOpen}>
+          <ExternalLink size={13} /> Open
+        </Button>
+      </div>
+
+      {item.labelIds.length ? <LabelChips ids={item.labelIds} labels={labels} max={10} /> : null}
+
+      {!detail ? (
+        <div className="skeleton h-10 w-2/3" />
+      ) : (
+        <>
+          {description ? (
+            <p className="line-clamp-4 max-w-prose whitespace-pre-wrap text-muted">{description}</p>
+          ) : (
+            <p className="text-faint">No description.</p>
+          )}
+          {subtasks.length ? (
+            <div>
+              <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-muted">
+                <ListChecks size={13} />
+                Subtasks {subtasks.filter((s) => s.completedAt).length} of {subtasks.length} done
+              </p>
+              <ul className="flex flex-col gap-0.5">
+                {subtasks.slice(0, 8).map((sub) => (
+                  <li
+                    key={sub.id}
+                    className={cn("truncate", sub.completedAt && "text-faint line-through")}
+                  >
+                    {sub.completedAt ? "✓ " : "○ "}
+                    {sub.title}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {detail.links.length ? (
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {detail.links.map((link) => (
+                <a
+                  key={link.id}
+                  href={link.url}
+                  target={link.url.startsWith("http") ? "_blank" : undefined}
+                  rel="noreferrer noopener"
+                  className="flex items-center gap-1 text-accent hover:underline"
+                >
+                  <Link2 size={13} />
+                  {linkLabel(link.url, link.title)}
+                </a>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
