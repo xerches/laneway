@@ -18,11 +18,13 @@ import type {
   ItemLite,
   LabelLite,
   Member,
+  PageLite,
   Priority,
   ProjectFull,
   Recurrence,
   StatusCategory,
   StatusLite,
+  TemplateLite,
 } from "@/lib/types";
 
 type Data = { items: ItemLite[]; statuses: StatusLite[]; labels: LabelLite[] };
@@ -145,6 +147,8 @@ type Store = {
   visibleItems: ItemLite[];
   statuses: StatusLite[];
   labels: LabelLite[];
+  pages: PageLite[];
+  templates: TemplateLite[];
   filter: ItemFilter;
   setFilter: (filter: ItemFilter) => void;
   /** Bumped after every saved change, so open panels know to reload. */
@@ -181,6 +185,8 @@ export function ProjectStore({
   statuses,
   items,
   labels,
+  pages,
+  templates,
   members,
   userId,
   today,
@@ -190,6 +196,8 @@ export function ProjectStore({
   statuses: StatusLite[];
   items: ItemLite[];
   labels: LabelLite[];
+  pages: PageLite[];
+  templates: TemplateLite[];
   members: Member[];
   userId: string;
   today: string;
@@ -231,6 +239,8 @@ export function ProjectStore({
         : data.items,
       statuses: sorted,
       labels: [...data.labels].sort((a, b) => a.position - b.position),
+      pages,
+      templates,
       filter,
       setFilter,
       version,
@@ -396,7 +406,7 @@ export function ProjectStore({
         });
       },
     };
-  }, [data, project, members, userId, today, version, commit, filter]);
+  }, [data, project, members, userId, today, version, commit, filter, pages, templates]);
 
   return <StoreContext value={store}>{children}</StoreContext>;
 }

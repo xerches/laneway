@@ -137,3 +137,33 @@ export type NotificationEntry = {
 export type ActionResult<T = unknown> =
   | ({ ok: true } & T)
   | { ok: false; error: string };
+
+export type PageLite = {
+  id: string;
+  projectId: string;
+  title: string;
+  position: number;
+  updatedAt: string;
+};
+
+export type PageFull = PageLite & {
+  body: string;
+  updatedByName: string | null;
+};
+
+export type ItemTemplateData = {
+  priority?: string;
+  labelIds?: string[];
+  subtasks?: string[];
+  dueIn?: number | null;
+};
+
+export type TemplateLite = {
+  id: string;
+  workspaceId: string;
+  kind: "page" | "item";
+  name: string;
+  title: string;
+  body: string;
+  data: ItemTemplateData | null;
+};
