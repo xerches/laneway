@@ -42,6 +42,8 @@ This is phase 1 (the personal MVP). What works today:
 - **API and MCP** for scripts and AI assistants (Claude, Luna): read your
   agenda, search, create and update items, and comment. Each token can be
   kept to some workspaces, and its changes show as "You via <token name>".
+- **Import a plan** from a JSON file: workspaces, labels, projects, pages and
+  items in one go, with a preview first. Safe to run twice.
 - **GitHub**: mention an item key like `ALI-12` in a pull request and the item
   gets a link to it; when the PR merges, the item can move to done.
 - Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` to `5`
@@ -120,6 +122,49 @@ curl -X POST "<the address>" \
   -H "content-type: application/json" \
   -d '{"from":"someone@example.com","subject":"Hello","text":"First item by email"}'
 ```
+
+## Import a plan
+
+Settings → **Import a plan** loads a JSON file like this one. You see what it
+will add before anything is saved. Workspaces are matched to yours by name,
+then by kind; projects you already have (same name) are skipped.
+
+```json
+{
+  "version": 1,
+  "workspaces": [
+    {
+      "name": "Personal",
+      "kind": "personal",
+      "labels": [{ "name": "waiting", "color": "amber" }],
+      "projects": [
+        {
+          "name": "Kitchen refit",
+          "key": "KIT",
+          "color": "teal",
+          "pages": [{ "title": "Overview", "body": "Budget and contacts…" }],
+          "items": [
+            {
+              "title": "Get three quotes",
+              "status": "To do",
+              "priority": "high",
+              "labels": ["waiting"],
+              "startDate": "2026-12-01",
+              "dueDate": "2026-12-12",
+              "links": [{ "url": "obsidian://open?vault=Notes&file=Kitchen", "title": "Kitchen note" }],
+              "subtasks": ["Ask Sam for a builder", "Book visits"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Projects get Backlog, To do, In progress, Blocked and Done unless the file
+lists its own `statuses` (`name`, `color`, `category`: todo, active or done).
+Colors: gray, red, orange, amber, green, teal, blue, indigo, violet, pink.
 
 ## API, Claude and GitHub
 

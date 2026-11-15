@@ -2,13 +2,27 @@
 
 import { useState, useTransition, type ReactNode } from "react";
 import { formatDistanceToNowStrict } from "date-fns";
-import { Bot, Check, Copy, GitPullRequest, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Bot,
+  Check,
+  Copy,
+  FileUp,
+  GitPullRequest,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   createApiToken,
   createGithubHook,
   deleteGithubHook,
+  importFile,
   newGithubHookSecret,
+  previewImportFile,
   revokeApiToken,
   setGithubHookOnMerge,
 } from "@/actions";
@@ -17,6 +31,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { clientId } from "@/lib/client";
 import type { ApiTokenLite, GithubHookLite } from "@/lib/data";
+import type { ImportPreview } from "@/lib/import";
+import type { ImportResult } from "@/lib/import-run";
 import type { WorkspaceLite } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +64,7 @@ export function SettingsView({
         <header>
           <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
           <p className="text-[13px] text-muted">
-            Connect Laneway to Claude, your own scripts and GitHub.
+            Connect Laneway to Claude, your own scripts and GitHub, or import a plan.
           </p>
         </header>
 
@@ -60,6 +76,7 @@ export function SettingsView({
         />
         <Claude baseUrl={baseUrl} token={fresh?.token ?? null} />
         <Github workspaces={workspaces} hooks={hooks} baseUrl={baseUrl} />
+        <Import />
       </div>
     </div>
   );
@@ -510,6 +527,161 @@ function Github({
           <Plus size={14} /> Add GitHub webhook
         </Button>
       </div>
+    </Section>
+  );
+}
+
+// -------------------------------------------------------------------- import
+
+function Import() {
+  const [file, setFile] = useState<{ name: string; data: unknown } | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [problems, setProblems] = useState<string[]>([]);
+  const [done, setDone] = useState<ImportResult | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  function choose(picked: File | undefined) {
+    setPreview(null);
+    setProblems([]);
+    setDone(null);
+    setFile(null);
+    if (!picked) return;
+    startTransition(async () => {
+      let data: unknown;
+      try {
+        data = JSON.parse(await picked.text());
+      } catch {
+        setProblems(["That file isn't valid JSON."]);
+        return;
+      }
+      setFile({ name: picked.name, data });
+      const checked = await previewImportFile(data);
+      if (!checked.ok) return void setProblems(checked.problems);
+      setPreview(checked.preview);
+      setProblems(checked.preview.problems);
+    });
+  }
+
+  function run() {
+    if (!file) return;
+    startTransition(async () => {
+      const result = await importFile(file.data);
+      if (!result.ok) return void toast.error(result.error);
+      setDone(result.result);
+      setPreview(null);
+      setFile(null);
+      const n = result.result.projects.length;
+      toast.success(`Imported ${n} project${n === 1 ? "" : "s"}.`);
+    });
+  }
+
+  const newProjects = preview?.workspaces.flatMap((w) => w.projects.filter((p) => !p.exists)) ?? [];
+
+  return (
+    <Section
+      icon={<FileUp size={16} className="text-accent" />}
+      title="Import a plan"
+      description="Load workspaces, labels, projects, pages and items from a Laneway import file (JSON). You see what it will add before anything is saved. Projects you already have are left alone, so importing the same file twice is safe."
+    >
+      <label className="relative inline-flex cursor-pointer items-center gap-2 rounded-md border border-line bg-surface px-3 py-1.5 text-[13px] font-medium shadow-card hover:bg-surface-2">
+        <FileUp size={14} />
+        {file ? file.name : "Choose a file…"}
+        <input
+          type="file"
+          accept=".json,application/json"
+          className="sr-only"
+          onChange={(e) => {
+            choose(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </label>
+
+      {problems.length ? (
+        <div className="mt-3 rounded-lg border border-danger/40 bg-danger/10 p-3 text-[13px]">
+          <p className="mb-1 flex items-center gap-1.5 font-medium">
+            <AlertCircle size={14} className="text-danger" /> Fix these in the file, then choose it again:
+          </p>
+          <ul className="list-disc space-y-0.5 pl-5 text-muted">
+            {problems.slice(0, 10).map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {preview ? (
+        <div className="mt-4 flex flex-col gap-3">
+          {preview.workspaces.map((w) => (
+            <div key={w.name} className="rounded-lg border border-line p-3">
+              <p className="text-[13px] font-medium">
+                {w.into ? (
+                  w.into.name === w.name ? (
+                    <>Into your {w.into.name} workspace</>
+                  ) : (
+                    <>
+                      {w.name} goes into your {w.into.name} workspace
+                    </>
+                  )
+                ) : (
+                  <>New workspace: {w.name}</>
+                )}
+              </p>
+              {w.labelsToAdd.length ? (
+                <p className="mt-0.5 text-[12px] text-muted">New labels: {w.labelsToAdd.join(", ")}</p>
+              ) : null}
+              <ul className="mt-2 flex flex-col gap-1 text-[13px]">
+                {w.projects.map((p) => (
+                  <li key={p.name} className={cn("flex items-baseline gap-2", p.exists && "text-faint")}>
+                    <span className="w-14 shrink-0 font-mono text-[11px] text-faint">{p.key}</span>
+                    <span className="flex-1">{p.name}</span>
+                    <span className="text-[12px] text-muted">
+                      {p.exists
+                        ? "already there, skipped"
+                        : `${p.items} item${p.items === 1 ? "" : "s"}${p.pages ? `, ${p.pages} page${p.pages === 1 ? "" : "s"}` : ""}`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={pending || problems.length > 0 || newProjects.length === 0}
+              onClick={run}
+            >
+              Import {newProjects.length} project{newProjects.length === 1 ? "" : "s"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => choose(undefined)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {done ? (
+        <div className="mt-4 rounded-lg border border-line p-3 text-[13px]">
+          <p className="mb-1.5 flex items-center gap-1.5 font-medium">
+            <Check size={14} className="text-accent" /> Imported
+          </p>
+          <ul className="flex flex-col gap-1">
+            {done.projects.map((p) => (
+              <li key={p.id} className="flex items-baseline gap-2">
+                <span className="w-14 shrink-0 font-mono text-[11px] text-faint">{p.key}</span>
+                <Link href={`/w/${p.workspaceId}/p/${p.id}`} className="flex-1 hover:underline">
+                  {p.name}
+                </Link>
+                <span className="text-[12px] text-muted">{p.workspace}</span>
+              </li>
+            ))}
+          </ul>
+          {done.skipped.length ? (
+            <p className="mt-2 text-[12px] text-faint">Skipped, already there: {done.skipped.join(", ")}</p>
+          ) : null}
+        </div>
+      ) : null}
     </Section>
   );
 }

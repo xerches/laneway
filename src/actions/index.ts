@@ -12,6 +12,8 @@ import { ruleInputSchema, type RuleInput } from "@/lib/automation-types";
 import { todayString } from "@/lib/dates";
 import * as m from "@/lib/mutations";
 import { newToken } from "@/lib/api";
+import { describeImportError, importSchema, type ImportPreview } from "@/lib/import";
+import { previewImport, runImport } from "@/lib/import-run";
 import { requireUser } from "@/lib/session";
 import { TEMPLATES } from "@/lib/templates";
 import { MAX_WIDGETS, WIDGETS } from "@/lib/widgets";
@@ -670,5 +672,25 @@ export async function deleteGithubHook(input: { hookId: string }) {
   return run(async () => {
     const data = z.object({ hookId: id }).parse(input);
     await m.deleteGithubHook(user, data.hookId);
+  });
+}
+
+// -------------------------------------------------------------------- import
+
+/** Checks an import file and says what it would add, without writing anything. */
+export async function previewImportFile(input: unknown): Promise<
+  { ok: true; preview: ImportPreview } | { ok: false; problems: string[] }
+> {
+  const user = await requireUser();
+  const parsed = importSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, problems: describeImportError(parsed.error) };
+  return { ok: true, preview: await previewImport(user.id, parsed.data) };
+}
+
+export async function importFile(input: unknown) {
+  const user = await requireUser();
+  return run(async () => {
+    const plan = importSchema.parse(input);
+    return { result: await runImport(user.id, plan) };
   });
 }
