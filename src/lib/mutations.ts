@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   activity,
+  dashboard,
   item,
   itemLabel,
   itemLink,
@@ -15,6 +16,7 @@ import {
   user,
   workspace,
   workspaceMember,
+  type DashboardWidget,
   type ItemTemplateData,
   type Recurrence,
 } from "@/db/schema";
@@ -981,4 +983,30 @@ export async function createItemFromEmail(
   });
 
   return { id, projectId: proj.id };
+}
+
+// ---------------------------------------------------------------- dashboards
+
+/** Saves someone's widget layout for the home dashboard (null) or a workspace's. */
+export async function saveDashboard(
+  actor: { id: string },
+  workspaceId: string | null,
+  widgets: DashboardWidget[],
+) {
+  if (workspaceId) await requireRole(actor.id, workspaceId);
+  const scope = workspaceId ?? "home";
+  await db
+    .insert(dashboard)
+    .values({ userId: actor.id, scope, widgets })
+    .onConflictDoUpdate({
+      target: [dashboard.userId, dashboard.scope],
+      set: { widgets, updatedAt: new Date() },
+    });
+}
+
+/** Goes back to the default layout. */
+export async function resetDashboard(actor: { id: string }, workspaceId: string | null) {
+  await db
+    .delete(dashboard)
+    .where(and(eq(dashboard.userId, actor.id), eq(dashboard.scope, workspaceId ?? "home")));
 }

@@ -313,3 +313,29 @@ export const template = pgTable(
   },
   (t) => [index("template_workspace_idx").on(t.workspaceId, t.kind)],
 );
+
+export type DashboardWidget = {
+  id: string;
+  /** One of WIDGETS in src/lib/widgets.ts. */
+  type: string;
+  size: "half" | "full";
+  /** Narrow a chart to one project. Empty means the whole dashboard scope. */
+  projectId?: string | null;
+};
+
+/**
+ * A person's own dashboard layout: which widgets, in which order and size.
+ * `scope` is a workspace id, or "home" for the dashboard across workspaces.
+ */
+export const dashboard = pgTable(
+  "dashboard",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    widgets: jsonb("widgets").$type<DashboardWidget[]>().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.scope] })],
+);

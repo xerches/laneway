@@ -22,6 +22,13 @@
       "when": 1794763636367,
       "tag": "0002_easy_bloodaxe",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794764750511,
+      "tag": "0003_mature_silver_surfer",
+      "breakpoints": true
     }
   ]
 }

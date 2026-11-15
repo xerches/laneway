@@ -17,5 +17,5 @@ export default function HomePage() {
 async function Home() {
   const user = await requireUser();
   const data = await getDashboard(user.id, null);
-  return <Dashboard workspaceId={null} items={data.items} activity={data.activity} />;
+  return <Dashboard workspaceId={null} {...data} />;
 }
