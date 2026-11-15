@@ -6,11 +6,13 @@ import {
   CalendarDays,
   Check,
   Copy,
+  GanttChart,
   KanbanSquare,
   List,
   Mail,
   MoreHorizontal,
   Plus,
+  Tag,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,26 +32,35 @@ import {
   MenuTrigger,
 } from "@/components/ui/overlays";
 import { isTypingTarget, useToday } from "@/lib/client";
-import type { ItemLite, Member, ProjectFull, StatusLite } from "@/lib/types";
+import type { ItemLite, LabelLite, Member, ProjectFull, StatusLite } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Board, QuickAdd } from "./board";
 import { CalendarView } from "./calendar";
+import { FilterButton } from "./filter-bar";
 import { ItemPanel } from "./item-panel";
+import { LabelManager } from "./labels";
 import { ListView } from "./list";
 import { ProjectStore, useProject } from "./store";
+import { TimelineView } from "./timeline";
 
-type View = "board" | "list" | "calendar";
+type View = "board" | "list" | "calendar" | "timeline";
 
 const VIEWS: { id: View; label: string; icon: typeof List; key: string }[] = [
   { id: "board", label: "Board", icon: KanbanSquare, key: "1" },
   { id: "list", label: "List", icon: List, key: "2" },
   { id: "calendar", label: "Calendar", icon: CalendarDays, key: "3" },
+  { id: "timeline", label: "Timeline", icon: GanttChart, key: "4" },
 ];
+
+function isView(value: unknown): value is View {
+  return VIEWS.some((v) => v.id === value);
+}
 
 export function ProjectView(props: {
   project: ProjectFull;
   statuses: StatusLite[];
   items: ItemLite[];
+  labels: LabelLite[];
   members: Member[];
   userId: string;
 }) {
@@ -77,11 +88,11 @@ export function ProjectSkeleton() {
 }
 
 function ProjectScreen() {
-  const { project, addItem, items } = useProject();
+  const { project, addItem, items, visibleItems, filter } = useProject();
   const pathname = usePathname();
   const params = useSearchParams();
   const viewParam = params.get("view");
-  const view: View = viewParam === "list" || viewParam === "calendar" ? viewParam : "board";
+  const view: View = isView(viewParam) ? viewParam : "board";
   const openId = params.get("item");
   const [adding, setAdding] = useState(false);
 
@@ -126,7 +137,7 @@ function ProjectScreen() {
     }
     function onView(event: Event) {
       const detail = (event as CustomEvent).detail;
-      if (detail === "board" || detail === "list" || detail === "calendar") setView(detail);
+      if (isView(detail)) setView(detail);
     }
     window.addEventListener("keydown", onKey);
     window.addEventListener("laneway:new-item", onNewItem);
@@ -171,8 +182,11 @@ function ProjectScreen() {
             </button>
           ))}
           <span className="flex-1" />
-          <span className="pr-1 text-xs text-faint tabular-nums max-sm:hidden">
-            {items.filter((i) => !i.completedAt).length} open
+          <FilterButton />
+          <span className="pr-1 pl-1 text-xs text-faint tabular-nums max-sm:hidden">
+            {visibleItems.length !== items.length || filter.hideDone
+              ? `${visibleItems.length} of ${items.length}`
+              : `${items.filter((i) => !i.completedAt).length} open`}
           </span>
         </div>
 
@@ -192,6 +206,7 @@ function ProjectScreen() {
         {view === "board" ? <Board onOpen={openItem} /> : null}
         {view === "list" ? <ListView onOpen={openItem} /> : null}
         {view === "calendar" ? <CalendarView onOpen={openItem} /> : null}
+        {view === "timeline" ? <TimelineView onOpen={openItem} /> : null}
       </div>
 
       {openId ? <ItemPanel itemId={openId} onClose={closeItem} /> : null}
@@ -238,9 +253,9 @@ function ProjectTitle() {
 }
 
 function ProjectMenu() {
-  const { project, run } = useProject();
+  const { project, run, labels, addLabel, changeLabel, removeLabel } = useProject();
   const { workspaces } = useApp();
-  const [dialog, setDialog] = useState<"email" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"email" | "labels" | "delete" | null>(null);
   const [pending, startTransition] = useTransition();
   const workspace = workspaces.find((w) => w.id === project.workspaceId);
 
@@ -264,6 +279,9 @@ function ProjectMenu() {
             />
           </div>
           <MenuSeparator />
+          <MenuItem onSelect={() => setDialog("labels")}>
+            <Tag size={14} /> Labels
+          </MenuItem>
           <MenuItem onSelect={() => setDialog("email")}>
             <Mail size={14} /> Email to this project
           </MenuItem>
@@ -281,6 +299,19 @@ function ProjectMenu() {
             description="Every email sent to this address becomes an item here, and shows up in your inbox."
           >
             <EmailIntake token={project.inboundToken} />
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
+      <Dialog open={dialog === "labels"} onOpenChange={(open) => !open && setDialog(null)}>
+        {dialog === "labels" ? (
+          <DialogContent title={`Labels in ${workspace?.name ?? "this workspace"}`}>
+            <LabelManager
+              labels={labels}
+              onAdd={(name) => addLabel(name)}
+              onChange={changeLabel}
+              onRemove={removeLabel}
+            />
           </DialogContent>
         ) : null}
       </Dialog>

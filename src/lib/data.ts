@@ -4,6 +4,8 @@ import { db } from "@/db";
 import {
   activity,
   item,
+  itemLink,
+  label,
   notification,
   project,
   status,
@@ -17,6 +19,7 @@ import type {
   DashboardItem,
   ItemDetail,
   ItemLite,
+  LabelLite,
   Member,
   NotificationEntry,
   Priority,
@@ -54,6 +57,7 @@ const itemColumns = {
   commentCount: sql<number>`(select count(*) from activity a where a.item_id = "item"."id" and a.type = 'comment')::int`,
   subtaskTotal: sql<number>`(select count(*) from item s where s.parent_id = "item"."id")::int`,
   subtaskDone: sql<number>`(select count(*) from item s where s.parent_id = "item"."id" and s.completed_at is not null)::int`,
+  labelIds: sql<string[]>`coalesce((select array_agg(il.label_id order by il.label_id) from item_label il where il.item_id = "item"."id"), '{}')`,
 };
 
 type ItemRow = {
@@ -76,11 +80,13 @@ type ItemRow = {
   commentCount: number;
   subtaskTotal: number;
   subtaskDone: number;
+  labelIds: string[] | null;
 };
 
 export function toItemLite(row: ItemRow): ItemLite {
   return {
     ...row,
+    labelIds: row.labelIds ?? [],
     priority: row.priority as Priority,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
@@ -209,15 +215,48 @@ export async function getProjectItems(projectId: string): Promise<ItemLite[]> {
   return rows.map(toItemLite);
 }
 
+/** Labels in one workspace. Callers check access to the workspace first. */
+export async function getLabels(workspaceId: string): Promise<LabelLite[]> {
+  return db
+    .select({
+      id: label.id,
+      workspaceId: label.workspaceId,
+      name: label.name,
+      color: label.color,
+      position: label.position,
+    })
+    .from(label)
+    .where(eq(label.workspaceId, workspaceId))
+    .orderBy(asc(label.position), asc(label.createdAt));
+}
+
+/** Every label the user can see, across all of their workspaces. */
+export async function getAllLabels(userId: string): Promise<LabelLite[]> {
+  const mine = await getWorkspaceIds(userId);
+  if (mine.length === 0) return [];
+  return db
+    .select({
+      id: label.id,
+      workspaceId: label.workspaceId,
+      name: label.name,
+      color: label.color,
+      position: label.position,
+    })
+    .from(label)
+    .where(inArray(label.workspaceId, mine))
+    .orderBy(asc(label.position), asc(label.createdAt));
+}
+
 export async function getProjectBoard(userId: string, projectId: string) {
   const proj = await getProject(userId, projectId);
   if (!proj) return null;
-  const [statuses, items, members] = await Promise.all([
+  const [statuses, items, members, labels] = await Promise.all([
     getStatuses(projectId),
     getProjectItems(projectId),
     getMembers(proj.workspaceId),
+    getLabels(proj.workspaceId),
   ]);
-  return { project: proj, statuses, items, members };
+  return { project: proj, statuses, items, members, labels };
 }
 
 function toActivityEntry(row: {
@@ -250,7 +289,7 @@ export async function getItemDetail(
     .where(eq(item.id, itemId));
   if (!row) return null;
 
-  const [subtasks, feed] = await Promise.all([
+  const [subtasks, feed, links] = await Promise.all([
     db
       .select(itemColumns)
       .from(item)
@@ -271,6 +310,16 @@ export async function getItemDetail(
       .leftJoin(user, eq(user.id, activity.userId))
       .where(eq(activity.itemId, itemId))
       .orderBy(asc(activity.createdAt)),
+    db
+      .select({
+        id: itemLink.id,
+        url: itemLink.url,
+        title: itemLink.title,
+        createdAt: itemLink.createdAt,
+      })
+      .from(itemLink)
+      .where(eq(itemLink.itemId, itemId))
+      .orderBy(asc(itemLink.createdAt)),
   ]);
 
   const { description, ...rest } = row;
@@ -279,6 +328,7 @@ export async function getItemDetail(
     description,
     subtasks: subtasks.map(toItemLite),
     activity: feed.map(toActivityEntry),
+    links: links.map((l) => ({ ...l, createdAt: l.createdAt.toISOString() })),
   };
 }
 

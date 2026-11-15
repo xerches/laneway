@@ -8,6 +8,7 @@ import {
   Check,
   CircleDot,
   Flag,
+  Tag,
   Mail,
   MoreHorizontal,
   Plus,
@@ -34,6 +35,8 @@ import {
   RecurrencePicker,
   StatusPicker,
 } from "./pickers";
+import { LabelChips, LabelPicker } from "./labels";
+import { LinksSection } from "./links-section";
 import { useProject } from "./store";
 
 /** The side panel: every detail of one item, and its whole story. */
@@ -125,6 +128,7 @@ function PanelBody({ itemId, onClose }: { itemId: string; onClose: () => void })
       commentCount: 0,
       subtaskTotal: 0,
       subtaskDone: 0,
+      labelIds: [],
     };
     setPendingSubtasks([...subtasks, optimistic]);
     void store.run(() =>
@@ -249,6 +253,24 @@ function PanelBody({ itemId, onClose }: { itemId: string; onClose: () => void })
               />
             </Field>
 
+            <Field icon={<Tag size={14} />} label="Labels">
+              <LabelPicker
+                labels={store.labels}
+                value={item.labelIds}
+                onChange={(labelIds) => store.setItemLabels(itemId, labelIds)}
+                onCreate={(name) => store.addLabel(name)}
+                trigger={
+                  <button className={cn(valueButton, "h-auto min-h-8 py-1")}>
+                    {item.labelIds.length ? (
+                      <LabelChips ids={item.labelIds} labels={store.labels} max={8} />
+                    ) : (
+                      <span className="text-faint">No labels</span>
+                    )}
+                  </button>
+                }
+              />
+            </Field>
+
             <Field icon={<UserRound size={14} />} label="Owner">
               <AssigneePicker
                 members={members}
@@ -335,6 +357,13 @@ function PanelBody({ itemId, onClose }: { itemId: string; onClose: () => void })
             initial={detail?.description ?? ""}
             disabled={!detail}
             onSave={(description) => store.changeItem(itemId, { description })}
+          />
+
+          <LinksSection
+            key={detail ? "links-loaded" : "links-loading"}
+            itemId={itemId}
+            links={detail?.links ?? []}
+            loading={!detail}
           />
 
           <section className="mt-5">
@@ -587,6 +616,11 @@ export function describeActivity(entry: ActivityEntry, today: string): string | 
       return `renamed this from “${d.from}”`;
     case "recurrence":
       return d.to ? `set this to repeat ${d.to.toLowerCase()}` : "stopped this repeating";
+    case "labels":
+      if (d.added && d.removed) return `added ${d.added} and removed ${d.removed}`;
+      if (d.added) return `added the label${d.added.includes(",") ? "s" : ""} ${d.added}`;
+      if (d.removed) return `removed the label${d.removed.includes(",") ? "s" : ""} ${d.removed}`;
+      return null;
     default:
       return null;
   }

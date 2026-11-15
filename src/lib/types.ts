@@ -68,6 +68,22 @@ export type ItemLite = {
   commentCount: number;
   subtaskTotal: number;
   subtaskDone: number;
+  labelIds: string[];
+};
+
+export type LabelLite = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color: string;
+  position: number;
+};
+
+export type ItemLinkEntry = {
+  id: string;
+  url: string;
+  title: string;
+  createdAt: string;
 };
 
 export type ActivityEntry = {
@@ -86,6 +102,7 @@ export type ItemDetail = {
   description: string;
   subtasks: ItemLite[];
   activity: ActivityEntry[];
+  links: ItemLinkEntry[];
 };
 
 /** An item with enough context to show it outside its project. */

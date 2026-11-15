@@ -4,6 +4,7 @@ import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { COLORS } from "@/lib/colors";
+import { isSafeLink, normalizeLink } from "@/lib/links";
 import { getItemDetail, getWorkspaces, searchItems } from "@/lib/data";
 import * as m from "@/lib/mutations";
 import { requireUser } from "@/lib/session";
@@ -284,6 +285,94 @@ export async function addComment(input: { itemId: string; body: string }) {
       .parse(input);
     const commentId = await m.addComment(user, data.itemId, data.body);
     return { commentId };
+  });
+}
+
+// -------------------------------------------------------------------- labels
+
+const labelName = z.string().trim().min(1).max(40);
+
+export async function createLabel(input: {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, workspaceId: id, name: labelName, color }).parse(input);
+    await m.createLabel(user.id, data);
+    return { labelId: data.id };
+  });
+}
+
+export async function updateLabel(input: { labelId: string; name?: string; color?: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ labelId: id, name: labelName.optional(), color: color.optional() })
+      .parse(input);
+    const { labelId, ...patch } = data;
+    await m.updateLabel(user.id, labelId, patch);
+  });
+}
+
+export async function deleteLabel(input: { labelId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ labelId: id }).parse(input);
+    await m.deleteLabel(user.id, data.labelId);
+  });
+}
+
+export async function setItemLabels(input: { itemId: string; labelIds: string[] }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ itemId: id, labelIds: z.array(id).max(30) }).parse(input);
+    await m.setItemLabels(user, data.itemId, data.labelIds);
+  });
+}
+
+// --------------------------------------------------------------------- links
+
+const link = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2000)
+  .transform(normalizeLink)
+  .refine(isSafeLink, "Links must start with https://, http://, obsidian:// or mailto:");
+
+export async function addItemLink(input: {
+  id: string;
+  itemId: string;
+  url: string;
+  title?: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const parsed = z
+      .object({ id, itemId: id, url: z.string(), title: z.string().trim().max(200).optional() })
+      .parse(input);
+    const url = link.safeParse(parsed.url);
+    if (!url.success) {
+      throw new m.MutationError(
+        "That link can't be saved. Use a web address, an obsidian:// link or a mailto: address.",
+      );
+    }
+    await m.addItemLink(user, parsed.itemId, {
+      id: parsed.id,
+      url: url.data,
+      title: parsed.title ?? "",
+    });
+  });
+}
+
+export async function removeItemLink(input: { linkId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ linkId: id }).parse(input);
+    await m.removeItemLink(user, data.linkId);
   });
 }
 

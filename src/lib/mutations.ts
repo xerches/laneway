@@ -4,6 +4,9 @@ import { db } from "@/db";
 import {
   activity,
   item,
+  itemLabel,
+  itemLink,
+  label,
   notification,
   project,
   status,
@@ -293,6 +296,7 @@ type NewItem = {
   description?: string;
   recurrence?: Recurrence | null;
   source?: string;
+  labelIds?: string[];
 };
 
 /**
@@ -319,6 +323,9 @@ export async function insertItem(actorId: string | null, input: NewItem) {
     if (parent.projectId !== proj.id) throw new MutationError("Wrong project.");
   }
   if (input.assigneeId) await requireMember(input.assigneeId, proj.workspaceId);
+  const labelIds = input.labelIds?.length
+    ? await workspaceLabelIds(proj.workspaceId, input.labelIds)
+    : [];
 
   const id = input.id ?? newId();
   await db.transaction(async (tx) => {
@@ -365,6 +372,9 @@ export async function insertItem(actorId: string | null, input: NewItem) {
       userId: actorId,
       type: "created",
     });
+    if (labelIds.length) {
+      await tx.insert(itemLabel).values(labelIds.map((labelId) => ({ itemId: id, labelId })));
+    }
   });
 
   return { id, project: proj };
@@ -540,6 +550,16 @@ export async function patchItem(
         type: "created",
         data: { recurring: describeRecurrence(rec) },
       });
+      // The next copy keeps the same labels.
+      const labels = await tx
+        .select({ labelId: itemLabel.labelId })
+        .from(itemLabel)
+        .where(eq(itemLabel.itemId, itemId));
+      if (labels.length) {
+        await tx
+          .insert(itemLabel)
+          .values(labels.map((l) => ({ itemId: spawnedId!, labelId: l.labelId })));
+      }
       await tx.insert(notification).values({
         id: newId(),
         userId: merged.assigneeId ?? actor.id,
@@ -618,6 +638,132 @@ export async function addComment(
     }
   });
   return id;
+}
+
+// -------------------------------------------------------------------- labels
+
+/** Keeps only the ids that are labels in this workspace. */
+async function workspaceLabelIds(workspaceId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({ id: label.id })
+    .from(label)
+    .where(and(eq(label.workspaceId, workspaceId), inArray(label.id, ids)));
+  return rows.map((r) => r.id);
+}
+
+async function loadLabel(labelId: string) {
+  const [row] = await db.select().from(label).where(eq(label.id, labelId));
+  if (!row) throw new MutationError("That label no longer exists.");
+  return row;
+}
+
+export async function createLabel(
+  userId: string,
+  input: { id: string; workspaceId: string; name: string; color: string },
+) {
+  await requireRole(userId, input.workspaceId);
+  const [{ next }] = await db
+    .select({ next: sql<number>`coalesce(max(${label.position}), -1) + 1` })
+    .from(label)
+    .where(eq(label.workspaceId, input.workspaceId));
+  await db.insert(label).values({ ...input, position: next });
+}
+
+export async function updateLabel(
+  userId: string,
+  labelId: string,
+  patch: { name?: string; color?: string },
+) {
+  const row = await loadLabel(labelId);
+  await requireRole(userId, row.workspaceId);
+  await db.update(label).set(patch).where(eq(label.id, labelId));
+}
+
+export async function deleteLabel(userId: string, labelId: string) {
+  const [row] = await db.select().from(label).where(eq(label.id, labelId));
+  if (!row) return;
+  await requireRole(userId, row.workspaceId);
+  await db.delete(label).where(eq(label.id, labelId));
+}
+
+/** Replaces an item's labels and records what was added and removed. */
+export async function setItemLabels(
+  actor: { id: string },
+  itemId: string,
+  labelIds: string[],
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const wanted = await workspaceLabelIds(current.workspaceId, [...new Set(labelIds)]);
+
+  const existing = await db
+    .select({ labelId: itemLabel.labelId })
+    .from(itemLabel)
+    .where(eq(itemLabel.itemId, itemId));
+  const had = new Set(existing.map((e) => e.labelId));
+  const added = wanted.filter((id) => !had.has(id));
+  const removed = [...had].filter((id) => !wanted.includes(id));
+  if (added.length === 0 && removed.length === 0) return;
+
+  const names = await db
+    .select({ id: label.id, name: label.name })
+    .from(label)
+    .where(inArray(label.id, [...added, ...removed]));
+  const nameOf = (id: string) => names.find((n) => n.id === id)?.name ?? "label";
+
+  await db.transaction(async (tx) => {
+    if (removed.length) {
+      await tx
+        .delete(itemLabel)
+        .where(and(eq(itemLabel.itemId, itemId), inArray(itemLabel.labelId, removed)));
+    }
+    if (added.length) {
+      await tx.insert(itemLabel).values(added.map((labelId) => ({ itemId, labelId })));
+    }
+    await tx.update(item).set({ updatedAt: new Date() }).where(eq(item.id, itemId));
+    await tx.insert(activity).values({
+      id: newId(),
+      itemId,
+      projectId: current.projectId,
+      workspaceId: current.workspaceId,
+      userId: actor.id,
+      type: "labels",
+      data: {
+        added: added.length ? added.map(nameOf).join(", ") : null,
+        removed: removed.length ? removed.map(nameOf).join(", ") : null,
+      },
+    });
+  });
+}
+
+// --------------------------------------------------------------------- links
+
+export async function addItemLink(
+  actor: { id: string },
+  itemId: string,
+  input: { id: string; url: string; title: string },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(itemLink)
+    .where(eq(itemLink.itemId, itemId));
+  if (n >= 50) throw new MutationError("An item can hold up to 50 links.");
+  await db.insert(itemLink).values({
+    ...input,
+    itemId,
+    workspaceId: current.workspaceId,
+    createdBy: actor.id,
+  });
+}
+
+export async function removeItemLink(actor: { id: string }, linkId: string) {
+  const [row] = await db.select().from(itemLink).where(eq(itemLink.id, linkId));
+  if (!row) return;
+  await requireRole(actor.id, row.workspaceId);
+  await db.delete(itemLink).where(eq(itemLink.id, linkId));
 }
 
 // ------------------------------------------------------------- notifications
