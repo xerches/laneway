@@ -3,9 +3,11 @@ import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql } from "drizzl
 import { db } from "@/db";
 import {
   activity,
+  apiToken,
   automationRule,
   automationRun,
   dashboard,
+  githubHook,
   item,
   itemLink,
   label,
@@ -337,11 +339,12 @@ function toActivityEntry(row: {
   data: Record<string, string | null> | null;
   createdAt: Date;
 }): ActivityEntry {
-  // Changes an automation made on someone's behalf show the rule's name.
+  // Changes an automation made on someone's behalf show the rule's name, and
+  // changes from an API token or an integration say where they came from.
   const via = row.data?.via;
   return {
     ...row,
-    userName: via ? `Automation “${via}”` : row.userName,
+    userName: via ? `Automation “${via}”` : (row.data?.by ?? row.userName),
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -697,4 +700,75 @@ export async function getRuleRuns(ruleId: string): Promise<RunEntry[]> {
     message: r.message,
     createdAt: r.createdAt.toISOString(),
   }));
+}
+
+// -------------------------------------------------------------- integrations
+
+export type ApiTokenLite = {
+  id: string;
+  name: string;
+  prefix: string;
+  workspaceIds: string[] | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+};
+
+export type GithubHookLite = {
+  id: string;
+  workspaceId: string;
+  onMerge: "done" | "none";
+  createdByName: string | null;
+  lastDeliveryAt: string | null;
+  createdAt: string;
+};
+
+/** The person's API tokens, and the GitHub webhooks of their workspaces. */
+export async function getIntegrations(userId: string) {
+  const memberships = await db
+    .select({ id: workspaceMember.workspaceId })
+    .from(workspaceMember)
+    .where(eq(workspaceMember.userId, userId));
+  const workspaceIds = memberships.map((w) => w.id);
+  const [tokens, hooks] = await Promise.all([
+    db
+      .select()
+      .from(apiToken)
+      .where(eq(apiToken.userId, userId))
+      .orderBy(desc(apiToken.createdAt)),
+    workspaceIds.length
+      ? db
+          .select({
+            id: githubHook.id,
+            workspaceId: githubHook.workspaceId,
+            onMerge: githubHook.onMerge,
+            createdByName: user.name,
+            lastDeliveryAt: githubHook.lastDeliveryAt,
+            createdAt: githubHook.createdAt,
+          })
+          .from(githubHook)
+          .leftJoin(user, eq(user.id, githubHook.createdBy))
+          .where(inArray(githubHook.workspaceId, workspaceIds))
+          .orderBy(asc(githubHook.createdAt))
+      : Promise.resolve([]),
+  ]);
+  return {
+    tokens: tokens.map(
+      (t): ApiTokenLite => ({
+        id: t.id,
+        name: t.name,
+        prefix: t.prefix,
+        workspaceIds: t.workspaceIds,
+        lastUsedAt: t.lastUsedAt?.toISOString() ?? null,
+        createdAt: t.createdAt.toISOString(),
+      }),
+    ),
+    hooks: hooks.map(
+      (h): GithubHookLite => ({
+        ...h,
+        onMerge: h.onMerge === "none" ? "none" : "done",
+        lastDeliveryAt: h.lastDeliveryAt?.toISOString() ?? null,
+        createdAt: h.createdAt.toISOString(),
+      }),
+    ),
+  };
 }

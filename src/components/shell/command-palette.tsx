@@ -13,6 +13,7 @@ import {
   List,
   Plus,
   Search,
+  Settings,
   Zap,
 } from "lucide-react";
 import { Dialog as D } from "radix-ui";
@@ -199,6 +200,14 @@ export function CommandPalette({
                 >
                   <Inbox size={15} className="text-muted" />
                   Inbox
+                </Command.Item>
+                <Command.Item
+                  value="settings api tokens mcp claude github webhook integrations"
+                  onSelect={() => go("/settings")}
+                  className={itemClass}
+                >
+                  <Settings size={15} className="text-muted" />
+                  Settings
                 </Command.Item>
                 {workspaces.map((ws) => (
                   <Command.Item
