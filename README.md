@@ -34,11 +34,16 @@ This is phase 1 (the personal MVP). What works today:
   meeting notes, decision record, weekly review, trip plan), or save your own.
 - **Item templates**: save any item, with its labels, priority and subtasks,
   and make new ones from it under New item.
+- **Automations**, Jira-style: "when this happens, if this is true, do that".
+  Trigger on a new item, a status, priority or label change, a coming due
+  date, or a schedule. Set status, priority, labels, owner or due date,
+  comment, add a subtask, notify, or move to another project. Every rule has
+  a run log and a "Test on an item" button. Find them in a workspace's menu.
 - Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` to `5`
   to switch views.
 - Works on a phone browser, in light and dark mode.
 
-Planned next: automations, an
+Planned next: an
 API for assistants, GitHub and ClickUp connections, then teams.
 
 ## Run it on your computer
@@ -62,6 +67,9 @@ closed unless you set `SIGNUPS=open`.
 | `DATABASE_URL` | Postgres connection string. Set for you by Neon on Vercel; not needed on Netlify. |
 | `BETTER_AUTH_SECRET` | Long random secret that signs login sessions. Required. |
 | `BETTER_AUTH_URL` | The address of the app. Needed locally, optional on Vercel and Netlify. |
+| `CRON_SECRET` | Optional. Protects `/api/cron/automations`, which runs due-date and scheduled rules. Defaults to `BETTER_AUTH_SECRET`. |
+| `LANEWAY_SCHEDULER` | Set to `0` to stop a long-running server from running timed rules itself every 15 minutes. |
+| `TZ` | The time zone timed rules use, such as `America/New_York`. |
 | `SIGNUPS` | Set to `open` to let anyone create an account. Leave unset to keep it private. |
 
 ## Put it online (Vercel and Neon, free for personal use)
@@ -133,6 +141,7 @@ Where things live:
 - `src/components/project/`: board, list, calendar and the item panel.
 - `src/components/dashboard/`: dashboards, their widgets and charts, and the inbox.
 - `src/lib/widgets.ts`: the widget catalog and the default layout.
+- `src/lib/automations.ts`: the automation engine; `src/lib/automation-types.ts`: rule shapes and plain-English descriptions.
 - `netlify/database/migrations/`: SQL migrations. Never edit one that has
   already been applied; add a new one instead.
 

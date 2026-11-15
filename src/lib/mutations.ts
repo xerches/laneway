@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   activity,
+  automationRule,
   dashboard,
   item,
   itemLabel,
@@ -28,6 +29,7 @@ import {
   nextOccurrence,
 } from "./dates";
 import { newId } from "./id";
+import type { RuleInput } from "./automation-types";
 import { getTemplate } from "./templates";
 import type { Priority } from "./types";
 import { projectKey } from "./utils";
@@ -38,6 +40,15 @@ import { projectKey } from "./utils";
  */
 
 export class MutationError extends Error {}
+
+/**
+ * Who is making a change. `via` names the automation rule acting for them, so
+ * the item's activity says "Automation “…”" instead of the person's name.
+ */
+export type Actor = { id: string; name: string; via?: string };
+
+const viaData = (actor: { via?: string }): Record<string, string> =>
+  actor.via ? { via: actor.via } : {};
 
 async function requireRole(userId: string, workspaceId: string) {
   const [row] = await db
@@ -401,7 +412,7 @@ type ActivityRow = typeof activity.$inferInsert;
 
 /** Applies a change to an item and records what changed in its feed. */
 export async function patchItem(
-  actor: { id: string; name: string },
+  actor: Actor,
   itemId: string,
   patch: ItemPatch,
   today: string,
@@ -419,7 +430,7 @@ export async function patchItem(
       workspaceId: current.workspaceId,
       userId: actor.id,
       type,
-      data,
+      data: { ...data, ...viaData(actor) },
     });
 
   let justCompleted = false;
@@ -489,7 +500,9 @@ export async function patchItem(
     }
   }
 
-  if (Object.keys(set).length === 0) return { spawnedId: null as string | null };
+  if (Object.keys(set).length === 0) {
+    return { spawnedId: null as string | null, changed: [] as string[] };
+  }
 
   const merged = { ...current, ...set };
   let spawnedId: string | null = null;
@@ -592,7 +605,77 @@ export async function patchItem(
     }
   });
 
-  return { spawnedId };
+  return { spawnedId, changed: Object.keys(set) };
+}
+
+/**
+ * Moves an item (and its subtasks) to another project in the same workspace.
+ * Each one keeps a status with the same name, or the first one of the same
+ * kind, and gets a new number in the new project.
+ */
+export async function moveItemToProject(
+  actor: { id: string; via?: string },
+  itemId: string,
+  projectId: string,
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  if (current.parentId) throw new MutationError("Move the parent item instead.");
+  if (current.projectId === projectId) return;
+  const [from, to] = await Promise.all([loadProject(current.projectId), loadProject(projectId)]);
+  if (to.workspaceId !== current.workspaceId) {
+    throw new MutationError("Items can only move to a project in the same workspace.");
+  }
+  if (to.archivedAt) throw new MutationError("That project is archived.");
+
+  const [oldStatuses, newStatuses] = await Promise.all([
+    db.select().from(status).where(eq(status.projectId, from.id)),
+    db.select().from(status).where(eq(status.projectId, to.id)).orderBy(asc(status.position)),
+  ]);
+  if (newStatuses.length === 0) throw new MutationError("That project has no statuses.");
+  const mapStatus = (statusId: string) => {
+    const old = oldStatuses.find((s) => s.id === statusId);
+    const name = old?.name.trim().toLowerCase();
+    return (
+      newStatuses.find((s) => s.name.trim().toLowerCase() === name) ??
+      newStatuses.find((s) => s.category === old?.category) ??
+      newStatuses[0]
+    );
+  };
+
+  const subtasks = await db.select().from(item).where(eq(item.parentId, itemId));
+
+  await db.transaction(async (tx) => {
+    for (const row of [current, ...subtasks]) {
+      const [{ number }] = await tx
+        .update(project)
+        .set({ itemSeq: sql`${project.itemSeq} + 1` })
+        .where(eq(project.id, to.id))
+        .returning({ number: project.itemSeq });
+      const next = mapStatus(row.statusId);
+      await tx
+        .update(item)
+        .set({
+          projectId: to.id,
+          number,
+          statusId: next.id,
+          completedAt:
+            next.category === "done" ? (row.completedAt ?? new Date()) : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(item.id, row.id));
+      await tx.update(activity).set({ projectId: to.id }).where(eq(activity.itemId, row.id));
+    }
+    await tx.insert(activity).values({
+      id: newId(),
+      itemId,
+      projectId: to.id,
+      workspaceId: current.workspaceId,
+      userId: actor.id,
+      type: "moved",
+      data: { from: from.name, to: to.name, ...viaData(actor) },
+    });
+  });
 }
 
 export async function removeItem(userId: string, itemId: string) {
@@ -602,7 +685,7 @@ export async function removeItem(userId: string, itemId: string) {
 }
 
 export async function addComment(
-  actor: { id: string; name: string },
+  actor: Actor,
   itemId: string,
   body: string,
 ) {
@@ -618,6 +701,7 @@ export async function addComment(
       userId: actor.id,
       type: "comment",
       body,
+      data: actor.via ? viaData(actor) : null,
     });
     await tx.update(item).set({ updatedAt: new Date() }).where(eq(item.id, itemId));
 
@@ -694,7 +778,7 @@ export async function deleteLabel(userId: string, labelId: string) {
 
 /** Replaces an item's labels and records what was added and removed. */
 export async function setItemLabels(
-  actor: { id: string },
+  actor: { id: string; via?: string },
   itemId: string,
   labelIds: string[],
 ) {
@@ -709,7 +793,7 @@ export async function setItemLabels(
   const had = new Set(existing.map((e) => e.labelId));
   const added = wanted.filter((id) => !had.has(id));
   const removed = [...had].filter((id) => !wanted.includes(id));
-  if (added.length === 0 && removed.length === 0) return;
+  if (added.length === 0 && removed.length === 0) return { added: [] as string[] };
 
   const names = await db
     .select({ id: label.id, name: label.name })
@@ -737,9 +821,11 @@ export async function setItemLabels(
       data: {
         added: added.length ? added.map(nameOf).join(", ") : null,
         removed: removed.length ? removed.map(nameOf).join(", ") : null,
+        ...viaData(actor),
       },
     });
   });
+  return { added };
 }
 
 // --------------------------------------------------------------------- links
@@ -1009,4 +1095,119 @@ export async function resetDashboard(actor: { id: string }, workspaceId: string 
   await db
     .delete(dashboard)
     .where(and(eq(dashboard.userId, actor.id), eq(dashboard.scope, workspaceId ?? "home")));
+}
+
+// --------------------------------------------------------------- automations
+
+const MAX_RULES = 100;
+
+/** Rules may only point at labels, projects and people in their own workspace. */
+async function checkRuleTargets(workspaceId: string, rule: RuleInput) {
+  const projectIds = [
+    ...(rule.projectId ? [rule.projectId] : []),
+    ...rule.actions.flatMap((a) => (a.type === "move_project" ? [a.projectId] : [])),
+  ];
+  const labelIds = [
+    ...rule.actions.flatMap((a) =>
+      a.type === "add_label" || a.type === "remove_label" ? [a.labelId] : [],
+    ),
+    ...rule.conditions.flatMap((c) => (c.field === "label" ? [c.value] : [])),
+    ...(rule.trigger.type === "label_added" && rule.trigger.labelId ? [rule.trigger.labelId] : []),
+  ];
+  const people = rule.actions.flatMap((a) =>
+    a.type === "assign" && a.to && a.to !== "creator" ? [a.to] : [],
+  );
+  if (projectIds.length) {
+    const unique = [...new Set(projectIds)];
+    const found = await db
+      .select({ id: project.id })
+      .from(project)
+      .where(and(eq(project.workspaceId, workspaceId), inArray(project.id, unique)));
+    if (found.length !== unique.length) {
+      throw new MutationError("That project isn't in this workspace.");
+    }
+  }
+  if (labelIds.length) {
+    const unique = [...new Set(labelIds)];
+    if ((await workspaceLabelIds(workspaceId, unique)).length !== unique.length) {
+      throw new MutationError("One of those labels isn't in this workspace.");
+    }
+  }
+  for (const person of new Set(people)) await requireMember(person, workspaceId);
+}
+
+export async function createRule(
+  actor: { id: string },
+  input: { id: string; workspaceId: string } & RuleInput,
+) {
+  await requireRole(actor.id, input.workspaceId);
+  await checkRuleTargets(input.workspaceId, input);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(automationRule)
+    .where(eq(automationRule.workspaceId, input.workspaceId));
+  if (n >= MAX_RULES) throw new MutationError(`A workspace can have up to ${MAX_RULES} rules.`);
+  await db.insert(automationRule).values({
+    id: input.id,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    name: input.name,
+    enabled: input.enabled,
+    trigger: input.trigger,
+    conditions: input.conditions,
+    actions: input.actions,
+    position: n,
+    createdBy: actor.id,
+  });
+}
+
+async function loadRule(ruleId: string) {
+  const [row] = await db.select().from(automationRule).where(eq(automationRule.id, ruleId));
+  if (!row) throw new MutationError("That rule no longer exists.");
+  return row;
+}
+
+/**
+ * Saves changes to a rule. Whoever saves it becomes the person it acts for,
+ * so a rule never acts with the access of someone who didn't set it up.
+ */
+export async function updateRule(actor: { id: string }, ruleId: string, input: RuleInput) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  await checkRuleTargets(rule.workspaceId, input);
+  await db
+    .update(automationRule)
+    .set({
+      projectId: input.projectId,
+      name: input.name,
+      enabled: input.enabled,
+      trigger: input.trigger,
+      conditions: input.conditions,
+      actions: input.actions,
+      createdBy: actor.id,
+      updatedAt: new Date(),
+    })
+    .where(eq(automationRule.id, ruleId));
+}
+
+export async function setRuleEnabled(actor: { id: string }, ruleId: string, enabled: boolean) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  await db
+    .update(automationRule)
+    .set({ enabled, updatedAt: new Date() })
+    .where(eq(automationRule.id, ruleId));
+}
+
+export async function deleteRule(actor: { id: string }, ruleId: string) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  await db.delete(automationRule).where(eq(automationRule.id, ruleId));
+}
+
+/** Checks access before a test run or reading a rule's log. */
+export async function requireRuleAccess(actor: { id: string }, ruleId: string) {
+  const rule = await loadRule(ruleId);
+  await requireRole(actor.id, rule.workspaceId);
+  return rule;
 }

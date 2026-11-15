@@ -13,6 +13,7 @@ import {
   List,
   Plus,
   Search,
+  Zap,
 } from "lucide-react";
 import { Dialog as D } from "radix-ui";
 import { searchAllItems } from "@/actions";
@@ -213,6 +214,17 @@ export function CommandPalette({
                       {ws.name.slice(0, 1).toUpperCase()}
                     </span>
                     {ws.name}
+                  </Command.Item>
+                ))}
+                {workspaces.map((ws) => (
+                  <Command.Item
+                    key={`auto-${ws.id}`}
+                    value={`automations rules ${ws.name} ${ws.id}`}
+                    onSelect={() => go(`/w/${ws.id}/automations`)}
+                    className={itemClass}
+                  >
+                    <Zap size={15} className="text-muted" />
+                    Automations in {ws.name}
                   </Command.Item>
                 ))}
                 {projects.map((p) => (

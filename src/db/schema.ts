@@ -9,6 +9,7 @@ import {
   index,
   primaryKey,
   uniqueIndex,
+  boolean,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
@@ -338,4 +339,60 @@ export const dashboard = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.scope] })],
+);
+
+/** What starts a rule. See src/lib/automation-types.ts for every shape. */
+export type AutomationTrigger = { type: string } & Record<string, unknown>;
+export type AutomationCondition = { field: string; op: string; value?: string | null };
+export type AutomationAction = { type: string } & Record<string, unknown>;
+
+/**
+ * A Jira-style rule: when something happens (trigger), if every condition
+ * holds, do each action. Scoped to a workspace, or to one of its projects.
+ */
+export const automationRule = pgTable(
+  "automation_rule",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => project.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    trigger: jsonb("trigger").$type<AutomationTrigger>().notNull(),
+    conditions: jsonb("conditions").$type<AutomationCondition[]>().notNull().default([]),
+    actions: jsonb("actions").$type<AutomationAction[]>().notNull().default([]),
+    position: integer("position").notNull().default(0),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("automation_rule_workspace_idx").on(t.workspaceId)],
+);
+
+/** One line per time a rule ran, so you can see what it did and why it skipped. */
+export const automationRun = pgTable(
+  "automation_run",
+  {
+    id: text("id").primaryKey(),
+    ruleId: text("rule_id")
+      .notNull()
+      .references(() => automationRule.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    itemId: text("item_id").references(() => item.id, { onDelete: "set null" }),
+    itemTitle: text("item_title"),
+    // done | skipped | failed
+    outcome: text("outcome").notNull(),
+    message: text("message").notNull().default(""),
+    // Stops date and schedule rules from running twice for the same thing.
+    dedupeKey: text("dedupe_key"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("automation_run_rule_idx").on(t.ruleId, t.createdAt),
+    uniqueIndex("automation_run_dedupe_idx").on(t.ruleId, t.dedupeKey),
+  ],
 );

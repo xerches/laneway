@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarDays,
   Check,
@@ -17,6 +17,7 @@ import {
   Plus,
   Tag,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import * as actions from "@/actions";
@@ -279,6 +280,7 @@ function ProjectMenu() {
   const { project, run, labels, addLabel, changeLabel, removeLabel, templates } = useProject();
   const { workspaces } = useApp();
   const [dialog, setDialog] = useState<"email" | "labels" | "templates" | "delete" | null>(null);
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const workspace = workspaces.find((w) => w.id === project.workspaceId);
 
@@ -304,6 +306,13 @@ function ProjectMenu() {
           <MenuSeparator />
           <MenuItem onSelect={() => setDialog("labels")}>
             <Tag size={14} /> Labels
+          </MenuItem>
+          <MenuItem
+            onSelect={() =>
+              router.push(`/w/${project.workspaceId}/automations?project=${project.id}`)
+            }
+          >
+            <Zap size={14} /> Automations
           </MenuItem>
           <MenuItem onSelect={() => setDialog("templates")}>
             <BookmarkPlus size={14} /> Templates

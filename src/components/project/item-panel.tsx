@@ -635,6 +635,8 @@ export function describeActivity(entry: ActivityEntry, today: string): string | 
       if (d.added) return `added the label${d.added.includes(",") ? "s" : ""} ${d.added}`;
       if (d.removed) return `removed the label${d.removed.includes(",") ? "s" : ""} ${d.removed}`;
       return null;
+    case "moved":
+      return `moved this from ${d.from} to ${d.to}`;
     default:
       return null;
   }

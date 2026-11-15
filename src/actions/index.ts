@@ -5,12 +5,16 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { COLORS } from "@/lib/colors";
 import { isSafeLink, normalizeLink } from "@/lib/links";
-import { getItemDetail, getPage, getWorkspaces, searchItems } from "@/lib/data";
+import { getItemDetail, getPage, getRuleRuns, getWorkspaces, searchItems } from "@/lib/data";
+import { fireAutomations, testRule as runRuleTest, type AutomationEvent } from "@/lib/automations";
+import { ruleInputSchema, type RuleInput } from "@/lib/automation-types";
+import { todayString } from "@/lib/dates";
 import * as m from "@/lib/mutations";
 import { requireUser } from "@/lib/session";
 import { TEMPLATES } from "@/lib/templates";
 import { MAX_WIDGETS, WIDGETS } from "@/lib/widgets";
 import type { ActionResult, ItemDetail, PageFull } from "@/lib/types";
+import type { RunEntry } from "@/lib/automation-types";
 import type { SearchHit } from "@/lib/data";
 
 /**
@@ -242,6 +246,7 @@ export async function createItem(input: z.input<typeof newItem>) {
   return run(async () => {
     const data = newItem.parse(input);
     await m.insertItem(user.id, data);
+    await fireAutomations([{ type: "item_created", itemId: data.id }], todayString());
     return { itemId: data.id };
   });
 }
@@ -266,7 +271,13 @@ export async function updateItem(input: {
   const user = await requireUser();
   return run(async () => {
     const data = z.object({ itemId: id, patch: itemPatch, today: day }).parse(input);
-    return m.patchItem(user, data.itemId, data.patch, data.today);
+    const result = await m.patchItem(user, data.itemId, data.patch, data.today);
+    const events: AutomationEvent[] = [];
+    if (result.changed.includes("statusId")) events.push({ type: "status_changed", itemId: data.itemId });
+    if (result.changed.includes("priority")) events.push({ type: "priority_changed", itemId: data.itemId });
+    if (result.spawnedId) events.push({ type: "item_created", itemId: result.spawnedId });
+    if (events.length) await fireAutomations(events, data.today);
+    return { spawnedId: result.spawnedId };
   });
 }
 
@@ -330,7 +341,13 @@ export async function setItemLabels(input: { itemId: string; labelIds: string[] 
   const user = await requireUser();
   return run(async () => {
     const data = z.object({ itemId: id, labelIds: z.array(id).max(30) }).parse(input);
-    await m.setItemLabels(user, data.itemId, data.labelIds);
+    const { added } = await m.setItemLabels(user, data.itemId, data.labelIds);
+    if (added.length) {
+      await fireAutomations(
+        [{ type: "label_added", itemId: data.itemId, labelIds: added }],
+        todayString(),
+      );
+    }
   });
 }
 
@@ -472,6 +489,7 @@ export async function createItemFromTemplate(input: {
       .object({ id, projectId: id, templateId: id, statusId: id.nullish(), today: day })
       .parse(input);
     await m.createItemFromTemplate(user, data);
+    await fireAutomations([{ type: "item_created", itemId: data.id }], data.today);
     return { itemId: data.id };
   });
 }
@@ -534,4 +552,57 @@ export async function resetDashboard(input: { workspaceId: string | null }) {
     const data = z.object({ workspaceId: id.nullable() }).parse(input);
     await m.resetDashboard(user, data.workspaceId);
   });
+}
+
+// --------------------------------------------------------------- automations
+
+export async function createRule(input: { id: string; workspaceId: string; rule: RuleInput }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, workspaceId: id, rule: ruleInputSchema }).parse(input);
+    await m.createRule(user, { id: data.id, workspaceId: data.workspaceId, ...data.rule });
+    return { ruleId: data.id };
+  });
+}
+
+export async function updateRule(input: { ruleId: string; rule: RuleInput }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id, rule: ruleInputSchema }).parse(input);
+    await m.updateRule(user, data.ruleId, data.rule);
+  });
+}
+
+export async function setRuleEnabled(input: { ruleId: string; enabled: boolean }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id, enabled: z.boolean() }).parse(input);
+    await m.setRuleEnabled(user, data.ruleId, data.enabled);
+  });
+}
+
+export async function deleteRule(input: { ruleId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id }).parse(input);
+    await m.deleteRule(user, data.ruleId);
+  });
+}
+
+/** Runs a rule once on one item, whatever its trigger, to try it out. */
+export async function testRule(input: { ruleId: string; itemId: string; today: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id, itemId: id, today: day }).parse(input);
+    await m.requireRuleAccess(user, data.ruleId);
+    const result = await runRuleTest(data.ruleId, data.itemId, data.today);
+    return { outcome: result.outcome, message: result.message };
+  });
+}
+
+export async function loadRuleRuns(input: { ruleId: string }): Promise<RunEntry[]> {
+  const user = await requireUser();
+  const data = z.object({ ruleId: id }).parse(input);
+  await m.requireRuleAccess(user, data.ruleId);
+  return getRuleRuns(data.ruleId);
 }
