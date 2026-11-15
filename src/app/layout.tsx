@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Toaster } from "sonner";
+import { ThemeScript, ThemedToaster } from "@/components/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -23,10 +23,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}
+      // ThemeScript may set data-theme before React loads.
+      suppressHydrationWarning
     >
+      <head>
+        <ThemeScript />
+      </head>
       <body className="h-full">
         {children}
-        <Toaster position="bottom-right" theme="system" richColors closeButton />
+        <ThemedToaster />
       </body>
     </html>
   );
