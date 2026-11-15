@@ -14,13 +14,33 @@ import * as schema from "@/db/schema";
  * neither, the address is taken from each request.
  */
 function resolveBaseURL() {
+  // Self-hosted: every address this Laneway is opened at, comma-separated,
+  // e.g. "http://localhost:3000,https://pc.tailnet.ts.net". Read at runtime.
+  const selfHosted = splitUrls(process.env.LANEWAY_URLS);
+  if (selfHosted.length > 1) return hostsFor(selfHosted);
+  if (selfHosted.length === 1) return selfHosted[0];
   if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
-  const urls = (process.env.LANEWAY_DEPLOY_URLS ?? "").split(",").filter(Boolean);
+  const urls = splitUrls(process.env.LANEWAY_DEPLOY_URLS);
   if (urls.length === 0) return undefined;
+  return hostsFor(urls);
+}
+
+function splitUrls(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((url) => url.trim().replace(/\/$/, ""))
+    .filter((url) => url.startsWith("http"));
+}
+
+function hostsFor(urls: string[]) {
   return {
     allowedHosts: urls.map((url) => new URL(url).host),
     fallback: urls[0],
-    protocol: urls[0].startsWith("https:") ? ("https" as const) : ("http" as const),
+    protocol: urls.every((url) => url.startsWith("https:"))
+      ? ("https" as const)
+      : urls.every((url) => url.startsWith("http:"))
+        ? ("http" as const)
+        : ("auto" as const),
   };
 }
 

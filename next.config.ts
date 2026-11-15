@@ -17,6 +17,8 @@ const deployUrls = [
 
 const nextConfig: NextConfig = {
   env: { LANEWAY_DEPLOY_URLS: deployUrls },
+  // The Docker image (self-hosting) runs Next's small standalone server.
+  output: process.env.LANEWAY_STANDALONE === "1" ? "standalone" : undefined,
   devIndicators: false,
   cacheComponents: true,
   partialPrefetching: true,

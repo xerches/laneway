@@ -1,0 +1,60 @@
+# Laneway on your own computer: the app, its Postgres database, and a nightly
+# backup. Start it with:  docker compose up -d --build
+# Settings come from a file named .env next to this one (see .env.selfhost.example).
+name: laneway
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: laneway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-laneway}
+      POSTGRES_DB: laneway
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laneway -d laneway"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    image: laneway:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://laneway:${POSTGRES_PASSWORD:-laneway}@db:5432/laneway
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
+      LANEWAY_URLS: ${LANEWAY_URLS:-http://localhost:3000}
+      SIGNUPS: ${SIGNUPS:-}
+      # Your time zone, so "today", due dates and timed automations line up
+      # with your day, e.g. America/New_York.
+      TZ: ${TZ:-UTC}
+    # Only this computer can reach port 3000. Tailscale (see SELF-HOSTING.md)
+    # is how your other devices get in, over HTTPS.
+    ports:
+      - "127.0.0.1:${LANEWAY_PORT:-3000}:3000"
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: laneway
+      PGPASSWORD: ${POSTGRES_PASSWORD:-laneway}
+      PGDATABASE: laneway
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+      - ./scripts/backup.sh:/backup.sh:ro
+    entrypoint: ["sh", "/backup.sh"]
+
+volumes:
+  db-data:

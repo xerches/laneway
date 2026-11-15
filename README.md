@@ -52,7 +52,18 @@ This is phase 1 (the personal MVP). What works today:
 
 Planned next: a ClickUp import, then teams.
 
-## Run it on your computer
+## Host it yourself (recommended)
+
+Laneway runs on your own computer with Docker Desktop: the app, its database
+and a nightly backup, reachable from your phone and laptop through Tailscale.
+It's free and private. See [SELF-HOSTING.md](SELF-HOSTING.md); on Windows it's
+one script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+```
+
+## Run it for development
 
 You need [Node.js](https://nodejs.org) 20.12 or newer and a Postgres database.
 
@@ -73,6 +84,7 @@ closed unless you set `SIGNUPS=open`.
 | `DATABASE_URL` | Postgres connection string. Set for you by Neon on Vercel; not needed on Netlify. |
 | `BETTER_AUTH_SECRET` | Long random secret that signs login sessions. Required. |
 | `BETTER_AUTH_URL` | The address of the app. Needed locally, optional on Vercel and Netlify. |
+| `LANEWAY_URLS` | Self-hosted only: every address you open Laneway at, comma-separated. |
 | `CRON_SECRET` | Optional. Protects `/api/cron/automations`, which runs due-date and scheduled rules. Defaults to `BETTER_AUTH_SECRET`. |
 | `LANEWAY_SCHEDULER` | Set to `0` to stop a long-running server from running timed rules itself every 15 minutes. |
 | `TZ` | The time zone timed rules use, such as `America/New_York`. |
