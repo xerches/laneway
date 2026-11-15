@@ -33,6 +33,7 @@ yarn-error.log*
 # env files (secrets stay on your machine; the example is safe to share)
 .env*
 !.env.example
+!.env.selfhost.example
 
 # netlify
 .netlify
@@ -43,3 +44,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# self-hosting backups
+/backups/

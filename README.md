@@ -25,7 +25,18 @@ This is phase 1 (the personal MVP). What works today:
 Planned next: timeline, dependencies, time tracking, automations, GitHub and
 ClickUp connections, then teams.
 
-## Run it on your computer
+## Host it yourself (recommended)
+
+Laneway runs on your own computer with Docker Desktop: the app, its database
+and a nightly backup, reachable from your phone and laptop through Tailscale.
+It's free and private. See [SELF-HOSTING.md](SELF-HOSTING.md); on Windows it's
+one script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+```
+
+## Run it for development
 
 You need [Node.js](https://nodejs.org) 20.12 or newer and a Postgres database.
 
@@ -46,6 +57,7 @@ closed unless you set `SIGNUPS=open`.
 | `DATABASE_URL` | Postgres connection string. Set for you by Neon on Vercel; not needed on Netlify. |
 | `BETTER_AUTH_SECRET` | Long random secret that signs login sessions. Required. |
 | `BETTER_AUTH_URL` | The address of the app. Needed locally, optional on Vercel and Netlify. |
+| `LANEWAY_URLS` | Self-hosted only: every address you open Laneway at, comma-separated. |
 | `SIGNUPS` | Set to `open` to let anyone create an account. Leave unset to keep it private. |
 
 ## Put it online (Vercel and Neon, free for personal use)
