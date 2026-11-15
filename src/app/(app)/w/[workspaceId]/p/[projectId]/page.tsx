@@ -28,6 +28,9 @@ async function ProjectContent({
       project={board.project}
       statuses={board.statuses}
       items={board.items}
+      labels={board.labels}
+      pages={board.pages}
+      templates={board.templates}
       members={board.members}
       userId={user.id}
     />

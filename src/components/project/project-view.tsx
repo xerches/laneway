@@ -1,17 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarDays,
   Check,
+  BookmarkPlus,
+  ChevronDown,
   Copy,
+  FileText,
+  GanttChart,
   KanbanSquare,
   List,
   Mail,
   MoreHorizontal,
   Plus,
+  Tag,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import * as actions from "@/actions";
@@ -30,26 +36,48 @@ import {
   MenuTrigger,
 } from "@/components/ui/overlays";
 import { isTypingTarget, useToday } from "@/lib/client";
-import type { ItemLite, Member, ProjectFull, StatusLite } from "@/lib/types";
+import { clientId } from "@/lib/client";
+import type {
+  ItemLite,
+  LabelLite,
+  Member,
+  PageLite,
+  ProjectFull,
+  StatusLite,
+  TemplateLite,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Board, QuickAdd } from "./board";
 import { CalendarView } from "./calendar";
+import { FilterButton } from "./filter-bar";
 import { ItemPanel } from "./item-panel";
+import { LabelManager } from "./labels";
 import { ListView } from "./list";
+import { PagesView } from "./pages";
 import { ProjectStore, useProject } from "./store";
+import { TimelineView } from "./timeline";
 
-type View = "board" | "list" | "calendar";
+type View = "board" | "list" | "calendar" | "timeline" | "pages";
 
 const VIEWS: { id: View; label: string; icon: typeof List; key: string }[] = [
   { id: "board", label: "Board", icon: KanbanSquare, key: "1" },
   { id: "list", label: "List", icon: List, key: "2" },
   { id: "calendar", label: "Calendar", icon: CalendarDays, key: "3" },
+  { id: "timeline", label: "Timeline", icon: GanttChart, key: "4" },
+  { id: "pages", label: "Pages", icon: FileText, key: "5" },
 ];
+
+function isView(value: unknown): value is View {
+  return VIEWS.some((v) => v.id === value);
+}
 
 export function ProjectView(props: {
   project: ProjectFull;
   statuses: StatusLite[];
   items: ItemLite[];
+  labels: LabelLite[];
+  pages: PageLite[];
+  templates: TemplateLite[];
   members: Member[];
   userId: string;
 }) {
@@ -77,12 +105,13 @@ export function ProjectSkeleton() {
 }
 
 function ProjectScreen() {
-  const { project, addItem, items } = useProject();
+  const { project, addItem, items, visibleItems, filter } = useProject();
   const pathname = usePathname();
   const params = useSearchParams();
   const viewParam = params.get("view");
-  const view: View = viewParam === "list" || viewParam === "calendar" ? viewParam : "board";
+  const view: View = isView(viewParam) ? viewParam : "board";
   const openId = params.get("item");
+  const pageId = params.get("page");
   const [adding, setAdding] = useState(false);
 
   const setParams = useCallback(
@@ -101,7 +130,11 @@ function ProjectScreen() {
   );
 
   const setView = useCallback(
-    (next: View) => setParams({ view: next === "board" ? null : next }),
+    (next: View) => setParams({ view: next === "board" ? null : next, page: null }),
+    [setParams],
+  );
+  const selectPage = useCallback(
+    (id: string | null) => setParams({ page: id }, id !== null),
     [setParams],
   );
   const openItem = useCallback((id: string) => setParams({ item: id }, true), [setParams]);
@@ -126,7 +159,7 @@ function ProjectScreen() {
     }
     function onView(event: Event) {
       const detail = (event as CustomEvent).detail;
-      if (detail === "board" || detail === "list" || detail === "calendar") setView(detail);
+      if (isView(detail)) setView(detail);
     }
     window.addEventListener("keydown", onKey);
     window.addEventListener("laneway:new-item", onNewItem);
@@ -146,10 +179,7 @@ function ProjectScreen() {
           <ProjectTitle />
           <ProjectMenu />
           <span className="flex-1" />
-          <Button variant="primary" onClick={() => setAdding(true)} title="New item (C)">
-            <Plus size={15} />
-            <span className="max-sm:hidden">New item</span>
-          </Button>
+          <NewItemButton onNew={() => setAdding(true)} onCreated={openItem} />
         </div>
 
         <div className="mt-3 flex items-center gap-1 border-b border-line">
@@ -171,9 +201,16 @@ function ProjectScreen() {
             </button>
           ))}
           <span className="flex-1" />
-          <span className="pr-1 text-xs text-faint tabular-nums max-sm:hidden">
-            {items.filter((i) => !i.completedAt).length} open
-          </span>
+          {view !== "pages" ? (
+            <>
+              <FilterButton />
+              <span className="pr-1 pl-1 text-xs text-faint tabular-nums max-sm:hidden">
+                {visibleItems.length !== items.length || filter.hideDone
+                  ? `${visibleItems.length} of ${items.length}`
+                  : `${items.filter((i) => !i.completedAt).length} open`}
+              </span>
+            </>
+          ) : null}
         </div>
 
         {adding ? (
@@ -192,6 +229,8 @@ function ProjectScreen() {
         {view === "board" ? <Board onOpen={openItem} /> : null}
         {view === "list" ? <ListView onOpen={openItem} /> : null}
         {view === "calendar" ? <CalendarView onOpen={openItem} /> : null}
+        {view === "timeline" ? <TimelineView onOpen={openItem} /> : null}
+        {view === "pages" ? <PagesView pageId={pageId} onSelect={selectPage} /> : null}
       </div>
 
       {openId ? <ItemPanel itemId={openId} onClose={closeItem} /> : null}
@@ -238,9 +277,10 @@ function ProjectTitle() {
 }
 
 function ProjectMenu() {
-  const { project, run } = useProject();
+  const { project, run, labels, addLabel, changeLabel, removeLabel, templates } = useProject();
   const { workspaces } = useApp();
-  const [dialog, setDialog] = useState<"email" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"email" | "labels" | "templates" | "delete" | null>(null);
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const workspace = workspaces.find((w) => w.id === project.workspaceId);
 
@@ -264,6 +304,19 @@ function ProjectMenu() {
             />
           </div>
           <MenuSeparator />
+          <MenuItem onSelect={() => setDialog("labels")}>
+            <Tag size={14} /> Labels
+          </MenuItem>
+          <MenuItem
+            onSelect={() =>
+              router.push(`/w/${project.workspaceId}/automations?project=${project.id}`)
+            }
+          >
+            <Zap size={14} /> Automations
+          </MenuItem>
+          <MenuItem onSelect={() => setDialog("templates")}>
+            <BookmarkPlus size={14} /> Templates
+          </MenuItem>
           <MenuItem onSelect={() => setDialog("email")}>
             <Mail size={14} /> Email to this project
           </MenuItem>
@@ -281,6 +334,33 @@ function ProjectMenu() {
             description="Every email sent to this address becomes an item here, and shows up in your inbox."
           >
             <EmailIntake token={project.inboundToken} />
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
+      <Dialog open={dialog === "labels"} onOpenChange={(open) => !open && setDialog(null)}>
+        {dialog === "labels" ? (
+          <DialogContent title={`Labels in ${workspace?.name ?? "this workspace"}`}>
+            <LabelManager
+              labels={labels}
+              onAdd={(name) => addLabel(name)}
+              onChange={changeLabel}
+              onRemove={removeLabel}
+            />
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
+      <Dialog open={dialog === "templates"} onOpenChange={(open) => !open && setDialog(null)}>
+        {dialog === "templates" ? (
+          <DialogContent
+            title={`Templates in ${workspace?.name ?? "this workspace"}`}
+            description="Save an item or a page as a template from its menu. They show up under New item and New page."
+          >
+            <TemplateList
+              templates={templates}
+              onDelete={(templateId) => void run(() => actions.deleteTemplate({ templateId }))}
+            />
           </DialogContent>
         ) : null}
       </Dialog>
@@ -348,5 +428,119 @@ function EmailIntake({ token }: { token: string }) {
         Anyone with this address can add items here, so keep it private.
       </p>
     </div>
+  );
+}
+
+/** "New item", with a menu of item templates next to it. */
+function NewItemButton({
+  onNew,
+  onCreated,
+}: {
+  onNew: () => void;
+  onCreated: (id: string) => void;
+}) {
+  const { project, templates, run, today } = useProject();
+  const itemTemplates = templates.filter((t) => t.kind === "item");
+  return (
+    <span className="flex">
+      <Button
+        variant="primary"
+        onClick={onNew}
+        title="New item (C)"
+        className={cn(itemTemplates.length > 0 && "rounded-r-none")}
+      >
+        <Plus size={15} />
+        <span className="max-sm:hidden">New item</span>
+      </Button>
+      {itemTemplates.length > 0 ? (
+        <Menu>
+          <MenuTrigger asChild>
+            <Button
+              variant="primary"
+              aria-label="New item from a template"
+              className="rounded-l-none border-l border-white/25 px-2"
+            >
+              <ChevronDown size={15} />
+            </Button>
+          </MenuTrigger>
+          <MenuContent align="end" className="w-64">
+            <MenuLabel>New item from a template</MenuLabel>
+            {itemTemplates.map((t) => (
+              <MenuItem
+                key={t.id}
+                onSelect={async () => {
+                  const id = clientId();
+                  const result = await run(() =>
+                    actions.createItemFromTemplate({
+                      id,
+                      projectId: project.id,
+                      templateId: t.id,
+                      today,
+                    }),
+                  );
+                  if (result.ok) onCreated(id);
+                }}
+              >
+                <BookmarkPlus size={14} />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate">{t.name}</span>
+                  {t.data?.subtasks?.length ? (
+                    <span className="text-xs text-faint">
+                      {t.data.subtasks.length} subtask{t.data.subtasks.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                </span>
+              </MenuItem>
+            ))}
+          </MenuContent>
+        </Menu>
+      ) : null}
+    </span>
+  );
+}
+
+function TemplateList({
+  templates,
+  onDelete,
+}: {
+  templates: TemplateLite[];
+  onDelete: (id: string) => void;
+}) {
+  const [gone, setGone] = useState<string[]>([]);
+  const shown = templates.filter((t) => !gone.includes(t.id));
+  if (shown.length === 0) {
+    return <p className="text-[13px] text-faint">No saved templates yet.</p>;
+  }
+  return (
+    <ul className="flex flex-col divide-y divide-line text-[13px]">
+      {shown.map((t) => (
+        <li key={t.id} className="flex items-center gap-3 py-2">
+          {t.kind === "page" ? (
+            <FileText size={14} className="text-faint" />
+          ) : (
+            <BookmarkPlus size={14} className="text-faint" />
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{t.name}</span>
+            <span className="text-xs text-faint">
+              {t.kind === "page" ? "Page" : "Item"}
+              {t.kind === "item" && t.data?.subtasks?.length
+                ? ` · ${t.data.subtasks.length} subtasks`
+                : ""}
+            </span>
+          </span>
+          <button
+            aria-label={`Delete template ${t.name}`}
+            onClick={() => {
+              setGone((prev) => [...prev, t.id]);
+              onDelete(t.id);
+            }}
+            className="rounded p-1.5 text-faint hover:bg-surface-2 hover:text-danger"
+          >
+            <Trash2 size={14} />
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

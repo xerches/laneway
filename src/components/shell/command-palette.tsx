@@ -3,7 +3,19 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Command } from "cmdk";
-import { CalendarDays, Home, Inbox, KanbanSquare, List, Plus, Search } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarDays,
+  GanttChart,
+  Home,
+  Inbox,
+  KanbanSquare,
+  List,
+  Plus,
+  Search,
+  Settings,
+  Zap,
+} from "lucide-react";
 import { Dialog as D } from "radix-ui";
 import { searchAllItems } from "@/actions";
 import { Dot, Kbd } from "@/components/ui/bits";
@@ -159,6 +171,15 @@ export function CommandPalette({
                       <span className="flex-1">Show as calendar</span>
                       <Kbd>3</Kbd>
                     </Command.Item>
+                    <Command.Item
+                      value="view timeline gantt roadmap"
+                      onSelect={() => emit("laneway:view", "timeline")}
+                      className={itemClass}
+                    >
+                      <GanttChart size={15} className="text-muted" />
+                      <span className="flex-1">Show as timeline</span>
+                      <Kbd>4</Kbd>
+                    </Command.Item>
                   </>
                 ) : null}
               </Command.Group>
@@ -168,6 +189,10 @@ export function CommandPalette({
                   <Home size={15} className="text-muted" />
                   Home
                 </Command.Item>
+                <Command.Item value="my week this week agenda" onSelect={() => go("/week")} className={itemClass}>
+                  <CalendarCheck size={15} className="text-muted" />
+                  My week
+                </Command.Item>
                 <Command.Item
                   value="inbox notifications"
                   onSelect={() => go("/inbox")}
@@ -175,6 +200,14 @@ export function CommandPalette({
                 >
                   <Inbox size={15} className="text-muted" />
                   Inbox
+                </Command.Item>
+                <Command.Item
+                  value="settings api tokens mcp claude github webhook integrations"
+                  onSelect={() => go("/settings")}
+                  className={itemClass}
+                >
+                  <Settings size={15} className="text-muted" />
+                  Settings
                 </Command.Item>
                 {workspaces.map((ws) => (
                   <Command.Item
@@ -190,6 +223,17 @@ export function CommandPalette({
                       {ws.name.slice(0, 1).toUpperCase()}
                     </span>
                     {ws.name}
+                  </Command.Item>
+                ))}
+                {workspaces.map((ws) => (
+                  <Command.Item
+                    key={`auto-${ws.id}`}
+                    value={`automations rules ${ws.name} ${ws.id}`}
+                    onSelect={() => go(`/w/${ws.id}/automations`)}
+                    className={itemClass}
+                  >
+                    <Zap size={15} className="text-muted" />
+                    Automations in {ws.name}
                   </Command.Item>
                 ))}
                 {projects.map((p) => (

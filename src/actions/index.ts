@@ -1,14 +1,24 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { COLORS } from "@/lib/colors";
-import { getItemDetail, getWorkspaces, searchItems } from "@/lib/data";
+import { isSafeLink, normalizeLink } from "@/lib/links";
+import { getItemDetail, getPage, getRuleRuns, getWorkspaces, searchItems } from "@/lib/data";
+import { fireAutomations, testRule as runRuleTest, type AutomationEvent } from "@/lib/automations";
+import { ruleInputSchema, type RuleInput } from "@/lib/automation-types";
+import { todayString } from "@/lib/dates";
 import * as m from "@/lib/mutations";
+import { newToken } from "@/lib/api";
+import { describeImportError, importSchema, type ImportPreview } from "@/lib/import";
+import { previewImport, runImport } from "@/lib/import-run";
 import { requireUser } from "@/lib/session";
 import { TEMPLATES } from "@/lib/templates";
-import type { ActionResult, ItemDetail } from "@/lib/types";
+import { MAX_WIDGETS, WIDGETS } from "@/lib/widgets";
+import type { ActionResult, ItemDetail, PageFull } from "@/lib/types";
+import type { RunEntry } from "@/lib/automation-types";
 import type { SearchHit } from "@/lib/data";
 
 /**
@@ -240,6 +250,7 @@ export async function createItem(input: z.input<typeof newItem>) {
   return run(async () => {
     const data = newItem.parse(input);
     await m.insertItem(user.id, data);
+    await fireAutomations([{ type: "item_created", itemId: data.id }], todayString());
     return { itemId: data.id };
   });
 }
@@ -264,7 +275,13 @@ export async function updateItem(input: {
   const user = await requireUser();
   return run(async () => {
     const data = z.object({ itemId: id, patch: itemPatch, today: day }).parse(input);
-    return m.patchItem(user, data.itemId, data.patch, data.today);
+    const result = await m.patchItem(user, data.itemId, data.patch, data.today);
+    const events: AutomationEvent[] = [];
+    if (result.changed.includes("statusId")) events.push({ type: "status_changed", itemId: data.itemId });
+    if (result.changed.includes("priority")) events.push({ type: "priority_changed", itemId: data.itemId });
+    if (result.spawnedId) events.push({ type: "item_created", itemId: result.spawnedId });
+    if (events.length) await fireAutomations(events, data.today);
+    return { spawnedId: result.spawnedId };
   });
 }
 
@@ -284,6 +301,200 @@ export async function addComment(input: { itemId: string; body: string }) {
       .parse(input);
     const commentId = await m.addComment(user, data.itemId, data.body);
     return { commentId };
+  });
+}
+
+// -------------------------------------------------------------------- labels
+
+const labelName = z.string().trim().min(1).max(40);
+
+export async function createLabel(input: {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, workspaceId: id, name: labelName, color }).parse(input);
+    await m.createLabel(user.id, data);
+    return { labelId: data.id };
+  });
+}
+
+export async function updateLabel(input: { labelId: string; name?: string; color?: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ labelId: id, name: labelName.optional(), color: color.optional() })
+      .parse(input);
+    const { labelId, ...patch } = data;
+    await m.updateLabel(user.id, labelId, patch);
+  });
+}
+
+export async function deleteLabel(input: { labelId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ labelId: id }).parse(input);
+    await m.deleteLabel(user.id, data.labelId);
+  });
+}
+
+export async function setItemLabels(input: { itemId: string; labelIds: string[] }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ itemId: id, labelIds: z.array(id).max(30) }).parse(input);
+    const { added } = await m.setItemLabels(user, data.itemId, data.labelIds);
+    if (added.length) {
+      await fireAutomations(
+        [{ type: "label_added", itemId: data.itemId, labelIds: added }],
+        todayString(),
+      );
+    }
+  });
+}
+
+// --------------------------------------------------------------------- links
+
+const link = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2000)
+  .transform(normalizeLink)
+  .refine(isSafeLink, "Links must start with https://, http://, obsidian:// or mailto:");
+
+export async function addItemLink(input: {
+  id: string;
+  itemId: string;
+  url: string;
+  title?: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const parsed = z
+      .object({ id, itemId: id, url: z.string(), title: z.string().trim().max(200).optional() })
+      .parse(input);
+    const url = link.safeParse(parsed.url);
+    if (!url.success) {
+      throw new m.MutationError(
+        "That link can't be saved. Use a web address, an obsidian:// link or a mailto: address.",
+      );
+    }
+    await m.addItemLink(user, parsed.itemId, {
+      id: parsed.id,
+      url: url.data,
+      title: parsed.title ?? "",
+    });
+  });
+}
+
+export async function removeItemLink(input: { linkId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ linkId: id }).parse(input);
+    await m.removeItemLink(user, data.linkId);
+  });
+}
+
+// --------------------------------------------------------------------- pages
+
+const pageTitle = z.string().trim().max(200);
+const pageBody = z.string().max(200_000);
+
+export async function createPage(input: {
+  id: string;
+  projectId: string;
+  title: string;
+  body: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, projectId: id, title: pageTitle, body: pageBody })
+      .parse(input);
+    await m.createPage(user, data);
+    return { pageId: data.id };
+  });
+}
+
+export async function updatePage(input: { pageId: string; title?: string; body?: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ pageId: id, title: pageTitle.optional(), body: pageBody.optional() })
+      .parse(input);
+    const { pageId, ...patch } = data;
+    await m.updatePage(user, pageId, patch);
+  });
+}
+
+export async function deletePage(input: { pageId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ pageId: id }).parse(input);
+    await m.deletePage(user, data.pageId);
+  });
+}
+
+export async function loadPage(pageId: string): Promise<PageFull | null> {
+  const user = await requireUser();
+  if (!id.safeParse(pageId).success) return null;
+  return getPage(user.id, pageId);
+}
+
+// ----------------------------------------------------------------- templates
+
+const templateName = z.string().trim().min(1).max(80);
+
+export async function savePageTemplate(input: {
+  id: string;
+  workspaceId: string;
+  name: string;
+  title: string;
+  body: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, workspaceId: id, name: templateName, title: pageTitle, body: pageBody })
+      .parse(input);
+    await m.createTemplate(user, { ...data, kind: "page" });
+  });
+}
+
+export async function saveItemTemplate(input: { id: string; itemId: string; name: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, itemId: id, name: templateName }).parse(input);
+    await m.saveItemAsTemplate(user, data.itemId, { id: data.id, name: data.name });
+  });
+}
+
+export async function deleteTemplate(input: { templateId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ templateId: id }).parse(input);
+    await m.deleteTemplate(user, data.templateId);
+  });
+}
+
+export async function createItemFromTemplate(input: {
+  id: string;
+  projectId: string;
+  templateId: string;
+  statusId?: string | null;
+  today: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, projectId: id, templateId: id, statusId: id.nullish(), today: day })
+      .parse(input);
+    await m.createItemFromTemplate(user, data);
+    await fireAutomations([{ type: "item_created", itemId: data.id }], data.today);
+    return { itemId: data.id };
   });
 }
 
@@ -309,4 +520,177 @@ export async function loadItemDetail(itemId: string): Promise<ItemDetail | null>
 export async function searchAllItems(query: string): Promise<SearchHit[]> {
   const user = await requireUser();
   return searchItems(user.id, String(query).slice(0, 100));
+}
+
+// ---------------------------------------------------------------- dashboards
+
+const widget = z.object({
+  id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  type: z.enum(WIDGETS.map((w) => w.type) as [string, ...string[]]),
+  size: z.enum(["half", "full"]),
+  projectId: id.nullish(),
+});
+
+export async function saveDashboard(input: {
+  workspaceId: string | null;
+  widgets: { id: string; type: string; size: "half" | "full"; projectId?: string | null }[];
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ workspaceId: id.nullable(), widgets: z.array(widget).max(MAX_WIDGETS) })
+      .parse(input);
+    const ids = new Set(data.widgets.map((w) => w.id));
+    if (ids.size !== data.widgets.length) throw new m.MutationError("Two widgets share an id.");
+    await m.saveDashboard(
+      user,
+      data.workspaceId,
+      data.widgets.map((w) => ({ ...w, projectId: w.projectId ?? null })),
+    );
+  });
+}
+
+export async function resetDashboard(input: { workspaceId: string | null }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ workspaceId: id.nullable() }).parse(input);
+    await m.resetDashboard(user, data.workspaceId);
+  });
+}
+
+// --------------------------------------------------------------- automations
+
+export async function createRule(input: { id: string; workspaceId: string; rule: RuleInput }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, workspaceId: id, rule: ruleInputSchema }).parse(input);
+    await m.createRule(user, { id: data.id, workspaceId: data.workspaceId, ...data.rule });
+    return { ruleId: data.id };
+  });
+}
+
+export async function updateRule(input: { ruleId: string; rule: RuleInput }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id, rule: ruleInputSchema }).parse(input);
+    await m.updateRule(user, data.ruleId, data.rule);
+  });
+}
+
+export async function setRuleEnabled(input: { ruleId: string; enabled: boolean }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id, enabled: z.boolean() }).parse(input);
+    await m.setRuleEnabled(user, data.ruleId, data.enabled);
+  });
+}
+
+export async function deleteRule(input: { ruleId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id }).parse(input);
+    await m.deleteRule(user, data.ruleId);
+  });
+}
+
+/** Runs a rule once on one item, whatever its trigger, to try it out. */
+export async function testRule(input: { ruleId: string; itemId: string; today: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ ruleId: id, itemId: id, today: day }).parse(input);
+    await m.requireRuleAccess(user, data.ruleId);
+    const result = await runRuleTest(data.ruleId, data.itemId, data.today);
+    return { outcome: result.outcome, message: result.message };
+  });
+}
+
+export async function loadRuleRuns(input: { ruleId: string }): Promise<RunEntry[]> {
+  const user = await requireUser();
+  const data = z.object({ ruleId: id }).parse(input);
+  await m.requireRuleAccess(user, data.ruleId);
+  return getRuleRuns(data.ruleId);
+}
+
+// -------------------------------------------------------------- integrations
+
+/** Makes an API token. The token is returned once and never stored. */
+export async function createApiToken(input: { id: string; name: string; workspaceIds: string[] | null }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, name: z.string().trim().min(1).max(60), workspaceIds: z.array(id).max(50).nullable() })
+      .parse(input);
+    const made = newToken();
+    await m.createApiToken(user, { ...data, hash: made.hash, prefix: made.prefix });
+    return { token: made.token };
+  });
+}
+
+export async function revokeApiToken(input: { tokenId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ tokenId: id }).parse(input);
+    await m.revokeApiToken(user, data.tokenId);
+  });
+}
+
+const onMerge = z.enum(["done", "none"]);
+const hookSecret = () => randomBytes(24).toString("hex");
+
+/** Makes a GitHub webhook. Its secret is returned once, to paste into GitHub. */
+export async function createGithubHook(input: { id: string; workspaceId: string; onMerge: "done" | "none" }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, workspaceId: id, onMerge }).parse(input);
+    const secret = hookSecret();
+    await m.createGithubHook(user, { ...data, secret });
+    return { secret };
+  });
+}
+
+export async function setGithubHookOnMerge(input: { hookId: string; onMerge: "done" | "none" }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ hookId: id, onMerge }).parse(input);
+    await m.updateGithubHook(user, data.hookId, { onMerge: data.onMerge });
+  });
+}
+
+/** Replaces a webhook's secret, for when the old one is lost or leaked. */
+export async function newGithubHookSecret(input: { hookId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ hookId: id }).parse(input);
+    const secret = hookSecret();
+    await m.updateGithubHook(user, data.hookId, { secret });
+    return { secret };
+  });
+}
+
+export async function deleteGithubHook(input: { hookId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ hookId: id }).parse(input);
+    await m.deleteGithubHook(user, data.hookId);
+  });
+}
+
+// -------------------------------------------------------------------- import
+
+/** Checks an import file and says what it would add, without writing anything. */
+export async function previewImportFile(input: unknown): Promise<
+  { ok: true; preview: ImportPreview } | { ok: false; problems: string[] }
+> {
+  const user = await requireUser();
+  const parsed = importSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, problems: describeImportError(parsed.error) };
+  return { ok: true, preview: await previewImport(user.id, parsed.data) };
+}
+
+export async function importFile(input: unknown) {
+  const user = await requireUser();
+  return run(async () => {
+    const plan = importSchema.parse(input);
+    return { result: await runImport(user.id, plan) };
+  });
 }

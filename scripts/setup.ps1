@@ -25,6 +25,18 @@ if (Test-Path ".env") {
   $content = Get-Content ".env.selfhost.example" -Raw
   $content = $content -replace "(?m)^BETTER_AUTH_SECRET=.*$", "BETTER_AUTH_SECRET=$(New-Secret 32)"
   $content = $content -replace "(?m)^POSTGRES_PASSWORD=.*$", "POSTGRES_PASSWORD=$(New-Secret 24)"
+  # Windows names its time zones differently; newer .NET can translate them.
+  $iana = $null
+  try {
+    $windowsId = (Get-TimeZone).Id
+    $converted = ""
+    if ([System.TimeZoneInfo]::TryConvertWindowsIdToIanaId($windowsId, [ref]$converted)) { $iana = $converted }
+  } catch { }
+  if ($iana) {
+    $content = $content -replace "(?m)^TZ=.*$", "TZ=$iana"
+  } else {
+    Write-Host "Couldn't work out your time zone. Set TZ in .env (for example TZ=America/New_York) and run: docker compose up -d"
+  }
   Set-Content -Path ".env" -Value $content -NoNewline
   Write-Host "Wrote .env with new secrets."
 }

@@ -9,6 +9,7 @@ import {
   index,
   primaryKey,
   uniqueIndex,
+  boolean,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
@@ -205,4 +206,237 @@ export const notification = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("notification_user_idx").on(t.userId, t.readAt)],
+);
+
+/**
+ * Labels are shared by every project in a workspace, so "waiting" means the
+ * same thing on the Wedding board and the Fitness board.
+ */
+export const label = pgTable(
+  "label",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    color: text("color").notNull().default("gray"),
+    position: integer("position").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("label_workspace_idx").on(t.workspaceId)],
+);
+
+export const itemLabel = pgTable(
+  "item_label",
+  {
+    itemId: text("item_id")
+      .notNull()
+      .references(() => item.id, { onDelete: "cascade" }),
+    labelId: text("label_id")
+      .notNull()
+      .references(() => label.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.itemId, t.labelId] }),
+    index("item_label_label_idx").on(t.labelId),
+  ],
+);
+
+/** Web pages, Obsidian notes and anything else an item points at. */
+export const itemLink = pgTable(
+  "item_link",
+  {
+    id: text("id").primaryKey(),
+    itemId: text("item_id")
+      .notNull()
+      .references(() => item.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    title: text("title").notNull().default(""),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("item_link_item_idx").on(t.itemId)],
+);
+
+/** A Markdown document that lives in a project: notes, briefs, decisions. */
+export const page = pgTable(
+  "page",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    position: doublePrecision("position").notNull().default(0),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("page_project_idx").on(t.projectId)],
+);
+
+export type ItemTemplateData = {
+  priority?: string;
+  labelIds?: string[];
+  subtasks?: string[];
+  /** Due this many days after the item is made. */
+  dueIn?: number | null;
+};
+
+/**
+ * Templates someone saved in a workspace. "page" templates hold a title and
+ * a Markdown body; "item" templates also hold labels, priority and subtasks.
+ */
+export const template = pgTable(
+  "template",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    // page | item
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    data: jsonb("data").$type<ItemTemplateData>(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("template_workspace_idx").on(t.workspaceId, t.kind)],
+);
+
+export type DashboardWidget = {
+  id: string;
+  /** One of WIDGETS in src/lib/widgets.ts. */
+  type: string;
+  size: "half" | "full";
+  /** Narrow a chart to one project. Empty means the whole dashboard scope. */
+  projectId?: string | null;
+};
+
+/**
+ * A person's own dashboard layout: which widgets, in which order and size.
+ * `scope` is a workspace id, or "home" for the dashboard across workspaces.
+ */
+export const dashboard = pgTable(
+  "dashboard",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    widgets: jsonb("widgets").$type<DashboardWidget[]>().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.scope] })],
+);
+
+/** What starts a rule. See src/lib/automation-types.ts for every shape. */
+export type AutomationTrigger = { type: string } & Record<string, unknown>;
+export type AutomationCondition = { field: string; op: string; value?: string | null };
+export type AutomationAction = { type: string } & Record<string, unknown>;
+
+/**
+ * A Jira-style rule: when something happens (trigger), if every condition
+ * holds, do each action. Scoped to a workspace, or to one of its projects.
+ */
+export const automationRule = pgTable(
+  "automation_rule",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => project.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    trigger: jsonb("trigger").$type<AutomationTrigger>().notNull(),
+    conditions: jsonb("conditions").$type<AutomationCondition[]>().notNull().default([]),
+    actions: jsonb("actions").$type<AutomationAction[]>().notNull().default([]),
+    position: integer("position").notNull().default(0),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("automation_rule_workspace_idx").on(t.workspaceId)],
+);
+
+/** One line per time a rule ran, so you can see what it did and why it skipped. */
+export const automationRun = pgTable(
+  "automation_run",
+  {
+    id: text("id").primaryKey(),
+    ruleId: text("rule_id")
+      .notNull()
+      .references(() => automationRule.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    itemId: text("item_id").references(() => item.id, { onDelete: "set null" }),
+    itemTitle: text("item_title"),
+    // done | skipped | failed
+    outcome: text("outcome").notNull(),
+    message: text("message").notNull().default(""),
+    // Stops date and schedule rules from running twice for the same thing.
+    dedupeKey: text("dedupe_key"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("automation_run_rule_idx").on(t.ruleId, t.createdAt),
+    uniqueIndex("automation_run_dedupe_idx").on(t.ruleId, t.dedupeKey),
+  ],
+);
+
+/**
+ * Personal API tokens for the REST API and the MCP endpoint. Only a hash of
+ * the token is stored; the token itself is shown once, when it's made.
+ * `workspaceIds` limits a token to some workspaces (null means all of them).
+ */
+export const apiToken = pgTable(
+  "api_token",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    // The first characters, so you can tell tokens apart.
+    prefix: text("prefix").notNull(),
+    workspaceIds: jsonb("workspace_ids").$type<string[] | null>(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("api_token_hash_idx").on(t.tokenHash), index("api_token_user_idx").on(t.userId)],
+);
+
+/**
+ * A GitHub webhook for one workspace. Pull requests that mention an item key
+ * (like ALI-12) link to the item, and merging can move the item.
+ */
+export const githubHook = pgTable(
+  "github_hook",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    // done | none: what a merged pull request does to the items it mentions.
+    onMerge: text("on_merge").notNull().default("done"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("github_hook_workspace_idx").on(t.workspaceId)],
 );

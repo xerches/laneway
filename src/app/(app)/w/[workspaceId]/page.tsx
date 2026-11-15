@@ -21,8 +21,7 @@ async function WorkspaceHome({ params }: { params: PageProps<"/w/[workspaceId]">
     <Dashboard
       key={workspaceId}
       workspaceId={workspaceId}
-      items={data.items}
-      activity={data.activity}
+      {...data}
     />
   );
 }

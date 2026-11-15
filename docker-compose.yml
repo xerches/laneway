@@ -31,6 +31,9 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
       LANEWAY_URLS: ${LANEWAY_URLS:-http://localhost:3000}
       SIGNUPS: ${SIGNUPS:-}
+      # Your time zone, so "today", due dates and timed automations line up
+      # with your day, e.g. America/New_York.
+      TZ: ${TZ:-UTC}
     # Only this computer can reach port 3000. Tailscale (see SELF-HOSTING.md)
     # is how your other devices get in, over HTTPS.
     ports:

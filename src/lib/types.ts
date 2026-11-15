@@ -68,6 +68,22 @@ export type ItemLite = {
   commentCount: number;
   subtaskTotal: number;
   subtaskDone: number;
+  labelIds: string[];
+};
+
+export type LabelLite = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color: string;
+  position: number;
+};
+
+export type ItemLinkEntry = {
+  id: string;
+  url: string;
+  title: string;
+  createdAt: string;
 };
 
 export type ActivityEntry = {
@@ -86,6 +102,7 @@ export type ItemDetail = {
   description: string;
   subtasks: ItemLite[];
   activity: ActivityEntry[];
+  links: ItemLinkEntry[];
 };
 
 /** An item with enough context to show it outside its project. */
@@ -96,7 +113,11 @@ export type DashboardItem = ItemLite & {
   statusName: string;
   statusColor: string;
   statusCategory: StatusCategory;
+  statusPosition: number;
 };
+
+/** All-time top-level item counts for one project. */
+export type DashboardProjectCount = { projectId: string; total: number; done: number };
 
 export type DashboardActivity = ActivityEntry & {
   itemTitle: string;
@@ -120,3 +141,33 @@ export type NotificationEntry = {
 export type ActionResult<T = unknown> =
   | ({ ok: true } & T)
   | { ok: false; error: string };
+
+export type PageLite = {
+  id: string;
+  projectId: string;
+  title: string;
+  position: number;
+  updatedAt: string;
+};
+
+export type PageFull = PageLite & {
+  body: string;
+  updatedByName: string | null;
+};
+
+export type ItemTemplateData = {
+  priority?: string;
+  labelIds?: string[];
+  subtasks?: string[];
+  dueIn?: number | null;
+};
+
+export type TemplateLite = {
+  id: string;
+  workspaceId: string;
+  kind: "page" | "item";
+  name: string;
+  title: string;
+  body: string;
+  data: ItemTemplateData | null;
+};

@@ -16,6 +16,7 @@ import {
   RepeatBadge,
   StatusPicker,
 } from "./pickers";
+import { LabelChips } from "./labels";
 import { useProject } from "./store";
 
 // Narrower columns on a phone, so the status sits next to the title.
@@ -25,7 +26,7 @@ const cell = "flex h-10 items-center border-b border-line";
 
 /** A spreadsheet-style table, grouped by status. Every cell edits in place. */
 export function ListView({ onOpen }: { onOpen: (id: string) => void }) {
-  const { statuses, items } = useProject();
+  const { statuses, visibleItems: items } = useProject();
   return (
     <div className="thin-scroll h-full overflow-auto px-4 pb-10 md:px-6">
       <div className="flex min-w-[600px] flex-col gap-6 pt-1 sm:min-w-[780px]">
@@ -113,7 +114,7 @@ function Group({
 }
 
 function Row({ item, onOpen }: { item: ItemLite; onOpen: (id: string) => void }) {
-  const { statuses, members, today, changeItem } = useProject();
+  const { statuses, members, today, changeItem, labels } = useProject();
   const [editing, setEditing] = useState(false);
   const status = statuses.find((s) => s.id === item.statusId);
   const assignee = members.find((m) => m.id === item.assigneeId);
@@ -152,6 +153,7 @@ function Row({ item, onOpen }: { item: ItemLite; onOpen: (id: string) => void })
             {item.title}
           </button>
         )}
+        <LabelChips ids={item.labelIds} labels={labels} max={2} className="shrink-0 flex-nowrap max-sm:hidden" />
         <span className="flex shrink-0 items-center gap-2 text-faint">
           {item.source === "email" ? <Mail size={12} aria-label="Arrived by email" /> : null}
           {item.recurrence ? <RepeatBadge recurrence={item.recurrence} /> : null}

@@ -1,6 +1,6 @@
 import type { Priority, Recurrence, StatusCategory } from "./types";
 
-export type TemplateId = "blank" | "chores" | "client" | "sprint" | "content";
+export type TemplateId = "blank" | "tracker" | "chores" | "client" | "sprint" | "content";
 
 type TemplateStatus = { name: string; color: string; category: StatusCategory };
 
@@ -32,6 +32,20 @@ export const TEMPLATES: Template[] = [
     statuses: [
       { name: "To do", color: "gray", category: "todo" },
       { name: "In progress", color: "blue", category: "active" },
+      { name: "Done", color: "green", category: "done" },
+    ],
+    items: [],
+  },
+  {
+    id: "tracker",
+    name: "Backlog to done",
+    description: "Backlog, To do, In progress, Blocked and Done, for any real project.",
+    color: "indigo",
+    statuses: [
+      { name: "Backlog", color: "gray", category: "todo" },
+      { name: "To do", color: "blue", category: "todo" },
+      { name: "In progress", color: "amber", category: "active" },
+      { name: "Blocked", color: "red", category: "active" },
       { name: "Done", color: "green", category: "done" },
     ],
     items: [],

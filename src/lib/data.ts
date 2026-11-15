@@ -3,8 +3,17 @@ import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql } from "drizzl
 import { db } from "@/db";
 import {
   activity,
+  apiToken,
+  automationRule,
+  automationRun,
+  dashboard,
+  githubHook,
   item,
+  itemLink,
+  label,
   notification,
+  page,
+  template,
   project,
   status,
   user,
@@ -15,9 +24,14 @@ import type {
   ActivityEntry,
   DashboardActivity,
   DashboardItem,
+  DashboardProjectCount,
   ItemDetail,
   ItemLite,
+  LabelLite,
   Member,
+  PageFull,
+  PageLite,
+  TemplateLite,
   NotificationEntry,
   Priority,
   ProjectFull,
@@ -26,6 +40,8 @@ import type {
   StatusLite,
   WorkspaceLite,
 } from "./types";
+import type { Action, Condition, RuleLite, RunEntry, Trigger } from "./automation-types";
+import { cleanWidgets, defaultWidgets, type DashboardWidget } from "./widgets";
 
 /**
  * Every read goes through this file and takes the signed-in user's id, so a
@@ -54,6 +70,7 @@ const itemColumns = {
   commentCount: sql<number>`(select count(*) from activity a where a.item_id = "item"."id" and a.type = 'comment')::int`,
   subtaskTotal: sql<number>`(select count(*) from item s where s.parent_id = "item"."id")::int`,
   subtaskDone: sql<number>`(select count(*) from item s where s.parent_id = "item"."id" and s.completed_at is not null)::int`,
+  labelIds: sql<string[]>`coalesce((select array_agg(il.label_id order by il.label_id) from item_label il where il.item_id = "item"."id"), '{}')`,
 };
 
 type ItemRow = {
@@ -76,11 +93,13 @@ type ItemRow = {
   commentCount: number;
   subtaskTotal: number;
   subtaskDone: number;
+  labelIds: string[] | null;
 };
 
 export function toItemLite(row: ItemRow): ItemLite {
   return {
     ...row,
+    labelIds: row.labelIds ?? [],
     priority: row.priority as Priority,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
@@ -209,15 +228,105 @@ export async function getProjectItems(projectId: string): Promise<ItemLite[]> {
   return rows.map(toItemLite);
 }
 
+/** Labels in one workspace. Callers check access to the workspace first. */
+export async function getLabels(workspaceId: string): Promise<LabelLite[]> {
+  return db
+    .select({
+      id: label.id,
+      workspaceId: label.workspaceId,
+      name: label.name,
+      color: label.color,
+      position: label.position,
+    })
+    .from(label)
+    .where(eq(label.workspaceId, workspaceId))
+    .orderBy(asc(label.position), asc(label.createdAt));
+}
+
+/** Every label the user can see, across all of their workspaces. */
+export async function getAllLabels(userId: string): Promise<LabelLite[]> {
+  const mine = await getWorkspaceIds(userId);
+  if (mine.length === 0) return [];
+  return db
+    .select({
+      id: label.id,
+      workspaceId: label.workspaceId,
+      name: label.name,
+      color: label.color,
+      position: label.position,
+    })
+    .from(label)
+    .where(inArray(label.workspaceId, mine))
+    .orderBy(asc(label.position), asc(label.createdAt));
+}
+
+export async function getPages(projectId: string): Promise<PageLite[]> {
+  const rows = await db
+    .select({
+      id: page.id,
+      projectId: page.projectId,
+      title: page.title,
+      position: page.position,
+      updatedAt: page.updatedAt,
+    })
+    .from(page)
+    .where(eq(page.projectId, projectId))
+    .orderBy(asc(page.position), asc(page.createdAt));
+  return rows.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() }));
+}
+
+/** One page with its body, if the user may see it. */
+export async function getPage(userId: string, pageId: string): Promise<PageFull | null> {
+  const [row] = await db
+    .select({
+      id: page.id,
+      projectId: page.projectId,
+      title: page.title,
+      position: page.position,
+      updatedAt: page.updatedAt,
+      body: page.body,
+      updatedByName: user.name,
+    })
+    .from(page)
+    .innerJoin(
+      workspaceMember,
+      and(eq(workspaceMember.workspaceId, page.workspaceId), eq(workspaceMember.userId, userId)),
+    )
+    .leftJoin(user, eq(user.id, page.updatedBy))
+    .where(eq(page.id, pageId));
+  if (!row) return null;
+  return { ...row, updatedAt: row.updatedAt.toISOString() };
+}
+
+export async function getTemplates(workspaceId: string): Promise<TemplateLite[]> {
+  const rows = await db
+    .select({
+      id: template.id,
+      workspaceId: template.workspaceId,
+      kind: template.kind,
+      name: template.name,
+      title: template.title,
+      body: template.body,
+      data: template.data,
+    })
+    .from(template)
+    .where(eq(template.workspaceId, workspaceId))
+    .orderBy(asc(template.name));
+  return rows.map((r) => ({ ...r, kind: r.kind === "item" ? "item" : "page" }));
+}
+
 export async function getProjectBoard(userId: string, projectId: string) {
   const proj = await getProject(userId, projectId);
   if (!proj) return null;
-  const [statuses, items, members] = await Promise.all([
+  const [statuses, items, members, labels, pages, templates] = await Promise.all([
     getStatuses(projectId),
     getProjectItems(projectId),
     getMembers(proj.workspaceId),
+    getLabels(proj.workspaceId),
+    getPages(projectId),
+    getTemplates(proj.workspaceId),
   ]);
-  return { project: proj, statuses, items, members };
+  return { project: proj, statuses, items, members, labels, pages, templates };
 }
 
 function toActivityEntry(row: {
@@ -230,7 +339,14 @@ function toActivityEntry(row: {
   data: Record<string, string | null> | null;
   createdAt: Date;
 }): ActivityEntry {
-  return { ...row, createdAt: row.createdAt.toISOString() };
+  // Changes an automation made on someone's behalf show the rule's name, and
+  // changes from an API token or an integration say where they came from.
+  const via = row.data?.via;
+  return {
+    ...row,
+    userName: via ? `Automation “${via}”` : (row.data?.by ?? row.userName),
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
 export async function getItemDetail(
@@ -250,7 +366,7 @@ export async function getItemDetail(
     .where(eq(item.id, itemId));
   if (!row) return null;
 
-  const [subtasks, feed] = await Promise.all([
+  const [subtasks, feed, links] = await Promise.all([
     db
       .select(itemColumns)
       .from(item)
@@ -271,6 +387,16 @@ export async function getItemDetail(
       .leftJoin(user, eq(user.id, activity.userId))
       .where(eq(activity.itemId, itemId))
       .orderBy(asc(activity.createdAt)),
+    db
+      .select({
+        id: itemLink.id,
+        url: itemLink.url,
+        title: itemLink.title,
+        createdAt: itemLink.createdAt,
+      })
+      .from(itemLink)
+      .where(eq(itemLink.itemId, itemId))
+      .orderBy(asc(itemLink.createdAt)),
   ]);
 
   const { description, ...rest } = row;
@@ -279,23 +405,35 @@ export async function getItemDetail(
     description,
     subtasks: subtasks.map(toItemLite),
     activity: feed.map(toActivityEntry),
+    links: links.map((l) => ({ ...l, createdAt: l.createdAt.toISOString() })),
   };
 }
 
+/** How far back the dashboard looks at finished items (for the weekly charts). */
+export const DASHBOARD_WEEKS = 8;
+
 /**
- * Everything the home dashboard needs: open items, items finished in the
- * last two weeks, and the latest activity. Pass a workspace id to narrow it.
+ * Everything a dashboard needs: open items, items finished in the last
+ * DASHBOARD_WEEKS weeks, all-time progress per project, labels, the latest
+ * activity, and this person's widget layout. Pass a workspace id to narrow it.
  */
 export async function getDashboard(userId: string, workspaceId: string | null) {
   const mine = await getWorkspaceIds(userId);
   const scope = workspaceId ? mine.filter((id) => id === workspaceId) : mine;
+  const widgets = await getDashboardWidgets(userId, workspaceId);
   if (scope.length === 0) {
-    return { items: [] as DashboardItem[], activity: [] as DashboardActivity[] };
+    return {
+      items: [] as DashboardItem[],
+      activity: [] as DashboardActivity[],
+      projectCounts: [] as DashboardProjectCount[],
+      labels: [] as LabelLite[],
+      widgets,
+    };
   }
 
-  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const since = new Date(Date.now() - DASHBOARD_WEEKS * 7 * 24 * 60 * 60 * 1000);
 
-  const [rows, feed] = await Promise.all([
+  const [rows, feed, counts, labels] = await Promise.all([
     db
       .select({
         ...itemColumns,
@@ -305,6 +443,7 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
         statusName: status.name,
         statusColor: status.color,
         statusCategory: status.category,
+        statusPosition: status.position,
       })
       .from(item)
       .innerJoin(project, eq(project.id, item.projectId))
@@ -318,7 +457,7 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
         ),
       )
       .orderBy(asc(item.dueDate), asc(item.createdAt))
-      .limit(2000),
+      .limit(3000),
     db
       .select({
         id: activity.id,
@@ -341,10 +480,42 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
       .where(and(inArray(activity.workspaceId, scope), isNull(project.archivedAt)))
       .orderBy(desc(activity.createdAt))
       .limit(12),
+    db
+      .select({
+        projectId: item.projectId,
+        total: sql<number>`count(*)::int`,
+        done: sql<number>`count(${item.completedAt})::int`,
+      })
+      .from(item)
+      .innerJoin(project, eq(project.id, item.projectId))
+      .where(
+        and(inArray(item.workspaceId, scope), isNull(item.parentId), isNull(project.archivedAt)),
+      )
+      .groupBy(item.projectId),
+    db
+      .select({
+        id: label.id,
+        workspaceId: label.workspaceId,
+        name: label.name,
+        color: label.color,
+        position: label.position,
+      })
+      .from(label)
+      .where(inArray(label.workspaceId, scope))
+      .orderBy(asc(label.position), asc(label.createdAt)),
   ]);
 
   const items: DashboardItem[] = rows.map((r) => {
-    const { projectName, projectColor, projectKey, statusName, statusColor, statusCategory, ...rest } = r;
+    const {
+      projectName,
+      projectColor,
+      projectKey,
+      statusName,
+      statusColor,
+      statusCategory,
+      statusPosition,
+      ...rest
+    } = r;
     return {
       ...toItemLite(rest),
       projectName,
@@ -353,6 +524,7 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
       statusName,
       statusColor,
       statusCategory: statusCategory as StatusCategory,
+      statusPosition,
     };
   });
 
@@ -364,7 +536,19 @@ export async function getDashboard(userId: string, workspaceId: string | null) {
     projectName: f.projectName,
   }));
 
-  return { items, activity: recent };
+  return { items, activity: recent, projectCounts: counts, labels, widgets };
+}
+
+/** The saved widget layout for a dashboard, or the default one. */
+export async function getDashboardWidgets(
+  userId: string,
+  workspaceId: string | null,
+): Promise<DashboardWidget[]> {
+  const [row] = await db
+    .select({ widgets: dashboard.widgets })
+    .from(dashboard)
+    .where(and(eq(dashboard.userId, userId), eq(dashboard.scope, workspaceId ?? "home")));
+  return (row && cleanWidgets(row.widgets)) ?? defaultWidgets();
 }
 
 export async function getNotifications(userId: string): Promise<NotificationEntry[]> {
@@ -427,4 +611,164 @@ export async function searchItems(userId: string, query: string): Promise<Search
     )
     .orderBy(desc(item.updatedAt))
     .limit(12);
+}
+
+// --------------------------------------------------------------- automations
+
+/**
+ * The automation page for a workspace: its rules with their last run, plus
+ * what the rule editor needs to fill its pickers.
+ */
+export async function getAutomations(userId: string, workspaceId: string) {
+  if (!(await getRole(userId, workspaceId))) return null;
+  const [rules, stats, projects, labels, members, statusNames] = await Promise.all([
+    db
+      .select()
+      .from(automationRule)
+      .where(eq(automationRule.workspaceId, workspaceId))
+      .orderBy(asc(automationRule.position), asc(automationRule.createdAt)),
+    db
+      .select({
+        ruleId: automationRun.ruleId,
+        runs: sql<number>`count(*)::int`,
+        lastAt: sql<string>`max(${automationRun.createdAt})::text`,
+        lastOutcome: sql<string>`(array_agg(${automationRun.outcome} order by ${automationRun.createdAt} desc))[1]`,
+      })
+      .from(automationRun)
+      .where(eq(automationRun.workspaceId, workspaceId))
+      .groupBy(automationRun.ruleId),
+    db
+      .select({ id: project.id, workspaceId: project.workspaceId, name: project.name, color: project.color, key: project.key })
+      .from(project)
+      .where(and(eq(project.workspaceId, workspaceId), isNull(project.archivedAt)))
+      .orderBy(asc(project.position), asc(project.createdAt)),
+    getLabels(workspaceId),
+    getMembers(workspaceId),
+    db
+      .selectDistinct({ name: status.name, category: status.category })
+      .from(status)
+      .innerJoin(project, eq(project.id, status.projectId))
+      .where(and(eq(project.workspaceId, workspaceId), isNull(project.archivedAt))),
+  ]);
+
+  const list: RuleLite[] = rules.map((r) => {
+    const st = stats.find((x) => x.ruleId === r.id);
+    return {
+      id: r.id,
+      workspaceId: r.workspaceId,
+      projectId: r.projectId,
+      name: r.name,
+      enabled: r.enabled,
+      trigger: r.trigger as Trigger,
+      conditions: r.conditions as Condition[],
+      actions: r.actions as Action[],
+      createdBy: r.createdBy,
+      createdAt: r.createdAt.toISOString(),
+      runCount: st?.runs ?? 0,
+      lastRun: st ? { outcome: st.lastOutcome, createdAt: new Date(st.lastAt).toISOString() } : null,
+    };
+  });
+
+  // One entry per status name, in the order people usually work.
+  const order = { todo: 0, active: 1, done: 2 } as Record<string, number>;
+  const seen = new Set<string>();
+  const statuses = statusNames
+    .sort((a, b) => (order[a.category] ?? 3) - (order[b.category] ?? 3) || a.name.localeCompare(b.name))
+    .filter((s) => {
+      const key = s.name.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  return { rules: list, projects, labels, members, statuses };
+}
+
+export async function getRuleRuns(ruleId: string): Promise<RunEntry[]> {
+  const rows = await db
+    .select()
+    .from(automationRun)
+    .where(eq(automationRun.ruleId, ruleId))
+    .orderBy(desc(automationRun.createdAt))
+    .limit(100);
+  return rows.map((r) => ({
+    id: r.id,
+    ruleId: r.ruleId,
+    itemId: r.itemId,
+    itemTitle: r.itemTitle,
+    outcome: r.outcome as RunEntry["outcome"],
+    message: r.message,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+// -------------------------------------------------------------- integrations
+
+export type ApiTokenLite = {
+  id: string;
+  name: string;
+  prefix: string;
+  workspaceIds: string[] | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+};
+
+export type GithubHookLite = {
+  id: string;
+  workspaceId: string;
+  onMerge: "done" | "none";
+  createdByName: string | null;
+  lastDeliveryAt: string | null;
+  createdAt: string;
+};
+
+/** The person's API tokens, and the GitHub webhooks of their workspaces. */
+export async function getIntegrations(userId: string) {
+  const memberships = await db
+    .select({ id: workspaceMember.workspaceId })
+    .from(workspaceMember)
+    .where(eq(workspaceMember.userId, userId));
+  const workspaceIds = memberships.map((w) => w.id);
+  const [tokens, hooks] = await Promise.all([
+    db
+      .select()
+      .from(apiToken)
+      .where(eq(apiToken.userId, userId))
+      .orderBy(desc(apiToken.createdAt)),
+    workspaceIds.length
+      ? db
+          .select({
+            id: githubHook.id,
+            workspaceId: githubHook.workspaceId,
+            onMerge: githubHook.onMerge,
+            createdByName: user.name,
+            lastDeliveryAt: githubHook.lastDeliveryAt,
+            createdAt: githubHook.createdAt,
+          })
+          .from(githubHook)
+          .leftJoin(user, eq(user.id, githubHook.createdBy))
+          .where(inArray(githubHook.workspaceId, workspaceIds))
+          .orderBy(asc(githubHook.createdAt))
+      : Promise.resolve([]),
+  ]);
+  return {
+    tokens: tokens.map(
+      (t): ApiTokenLite => ({
+        id: t.id,
+        name: t.name,
+        prefix: t.prefix,
+        workspaceIds: t.workspaceIds,
+        lastUsedAt: t.lastUsedAt?.toISOString() ?? null,
+        createdAt: t.createdAt.toISOString(),
+      }),
+    ),
+    hooks: hooks.map(
+      (h): GithubHookLite => ({
+        ...h,
+        onMerge: h.onMerge === "none" ? "none" : "done",
+        lastDeliveryAt: h.lastDeliveryAt?.toISOString() ?? null,
+        createdAt: h.createdAt.toISOString(),
+      }),
+    ),
+  };
 }
