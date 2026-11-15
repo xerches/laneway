@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -9,7 +9,12 @@ import { cn } from "@/lib/utils";
  * the text colors. Each chart has a hover tooltip and a screen-reader table.
  */
 
-export type BarDatum = { key: string; label: string; value: number; color: string };
+export type BarDatum = {
+  key: string;
+  label: string;
+  value: number;
+  color: string;
+};
 
 /** Horizontal bars, one row per category, sorted as given. */
 export function BarList({
@@ -29,7 +34,9 @@ export function BarList({
   const sum = total ?? data.reduce((n, d) => n + d.value, 0);
 
   if (data.length === 0 || data.every((d) => d.value === 0)) {
-    return <p className="px-4 py-8 text-center text-[13px] text-muted">{empty}</p>;
+    return (
+      <p className="px-4 py-8 text-center text-[13px] text-muted">{empty}</p>
+    );
   }
 
   return (
@@ -62,7 +69,8 @@ export function BarList({
               </span>
               {hover === d.key ? (
                 <Tooltip className="top-[-34px] left-1/2 -translate-x-1/2">
-                  <b className="font-semibold">{d.label}</b>: {d.value} {unit} · {pct}%
+                  <b className="font-semibold">{d.label}</b>: {d.value} {unit} ·{" "}
+                  {pct}%
                 </Tooltip>
               ) : null}
             </li>
@@ -114,6 +122,26 @@ function Tooltip({
 
 const PAD = { top: 12, right: 12, bottom: 22, left: 28 };
 
+/**
+ * The chart's drawing width in CSS pixels, so text and marks stay the same
+ * size whether the widget is narrow or wide.
+ */
+function useWidth(fallback = 520) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = Math.round(entry.contentRect.width);
+      if (next > 0) setWidth(next);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
+
 /** Nice round gridline steps for a count axis. */
 function ticks(max: number): number[] {
   const top = Math.max(1, max);
@@ -122,11 +150,17 @@ function ticks(max: number): number[] {
   const step = [1, 2, 5, 10].map((s) => s * mag).find((s) => s >= raw) ?? raw;
   const out: number[] = [];
   for (let v = 0; v <= top + step * 0.001; v += step) out.push(Math.round(v));
-  if (out[out.length - 1] < top) out.push(out[out.length - 1] + Math.round(step));
+  if (out[out.length - 1] < top)
+    out.push(out[out.length - 1] + Math.round(step));
   return out.filter((v, i, a) => a.indexOf(v) === i);
 }
 
-export type ColumnDatum = { key: string; label: string; detail: string; value: number };
+export type ColumnDatum = {
+  key: string;
+  label: string;
+  detail: string;
+  value: number;
+};
 
 /** Vertical columns over time, one series, in the accent color. */
 export function ColumnChart({
@@ -139,86 +173,90 @@ export function ColumnChart({
   height?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const width = 520;
+  const [ref, width] = useWidth();
   const grid = ticks(Math.max(...data.map((d) => d.value)));
   const top = grid[grid.length - 1];
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom;
   const slot = plotW / data.length;
-  const barW = Math.min(36, slot - 2);
+  const barW = Math.max(4, Math.min(40, slot * 0.6));
   const y = (v: number) => PAD.top + plotH - (v / top) * plotH;
 
   return (
     <div className="relative px-3 pt-2 pb-3">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-auto w-full overflow-visible"
-        role="img"
-        aria-label={`${unit} per week: ${data.map((d) => `${d.label} ${d.value}`).join(", ")}`}
-        onPointerLeave={() => setHover(null)}
-      >
-        {grid.map((v) => (
-          <g key={v}>
-            <line
-              x1={PAD.left}
-              x2={width - PAD.right}
-              y1={y(v)}
-              y2={y(v)}
-              stroke="var(--border)"
-              strokeWidth={1}
-            />
-            <text
-              x={PAD.left - 6}
-              y={y(v)}
-              dy="0.32em"
-              textAnchor="end"
-              className="fill-[var(--text-faint)] text-[11px] tabular-nums"
-            >
-              {v}
-            </text>
-          </g>
-        ))}
-        {data.map((d, i) => {
-          const cx = PAD.left + slot * i + slot / 2;
-          const h = Math.max(d.value ? 3 : 0, (d.value / top) * plotH);
-          const x = cx - barW / 2;
-          const yTop = PAD.top + plotH - h;
-          const r = Math.min(4, h, barW / 2);
-          return (
-            <g key={d.key} onPointerEnter={() => setHover(i)}>
-              {/* Hit target: the whole column slot. */}
-              <rect
-                x={PAD.left + slot * i}
-                y={PAD.top}
-                width={slot}
-                height={plotH}
-                fill={hover === i ? "var(--surface-2)" : "transparent"}
+      <div ref={ref}>
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          className="block w-full overflow-visible"
+          role="img"
+          aria-label={`${unit} per week: ${data.map((d) => `${d.label} ${d.value}`).join(", ")}`}
+          onPointerLeave={() => setHover(null)}
+        >
+          {grid.map((v) => (
+            <g key={v}>
+              <line
+                x1={PAD.left}
+                x2={width - PAD.right}
+                y1={y(v)}
+                y2={y(v)}
+                stroke="var(--border)"
+                strokeWidth={1}
               />
-              {h > 0 ? (
-                <path
-                  d={`M${x},${PAD.top + plotH} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + barW - r} Q${x + barW},${yTop} ${x + barW},${yTop + r} V${PAD.top + plotH} Z`}
-                  fill="var(--accent)"
-                />
-              ) : null}
               <text
-                x={cx}
-                y={height - 6}
-                textAnchor="middle"
-                className="fill-[var(--text-faint)] text-[11px]"
+                x={PAD.left - 6}
+                y={y(v)}
+                dy="0.32em"
+                textAnchor="end"
+                className="fill-[var(--text-faint)] text-[11px] tabular-nums"
               >
-                {d.label}
+                {v}
               </text>
             </g>
-          );
-        })}
-        <line
-          x1={PAD.left}
-          x2={width - PAD.right}
-          y1={PAD.top + plotH}
-          y2={PAD.top + plotH}
-          stroke="var(--border-strong)"
-        />
-      </svg>
+          ))}
+          {data.map((d, i) => {
+            const cx = PAD.left + slot * i + slot / 2;
+            const h = Math.max(d.value ? 3 : 0, (d.value / top) * plotH);
+            const x = cx - barW / 2;
+            const yTop = PAD.top + plotH - h;
+            const r = Math.min(4, h, barW / 2);
+            return (
+              <g key={d.key} onPointerEnter={() => setHover(i)}>
+                {/* Hit target: the whole column slot. */}
+                <rect
+                  x={PAD.left + slot * i}
+                  y={PAD.top}
+                  width={slot}
+                  height={plotH}
+                  fill={hover === i ? "var(--surface-2)" : "transparent"}
+                />
+                {h > 0 ? (
+                  <path
+                    d={`M${x},${PAD.top + plotH} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + barW - r} Q${x + barW},${yTop} ${x + barW},${yTop + r} V${PAD.top + plotH} Z`}
+                    fill="var(--accent)"
+                  />
+                ) : null}
+                <text
+                  x={cx}
+                  y={height - 6}
+                  textAnchor="middle"
+                  className="fill-[var(--text-faint)] text-[11px]"
+                >
+                  {d.label}
+                </text>
+              </g>
+            );
+          })}
+          <line
+            x1={PAD.left}
+            x2={width - PAD.right}
+            y1={PAD.top + plotH}
+            y2={PAD.top + plotH}
+            stroke="var(--border-strong)"
+          />
+        </svg>
+      </div>
       {hover !== null ? (
         <Tooltip
           className="top-0 -translate-x-1/2"
@@ -226,7 +264,8 @@ export function ColumnChart({
             left: `clamp(70px, ${((PAD.left + slot * hover + slot / 2) / width) * 100}%, calc(100% - 70px))`,
           }}
         >
-          <b className="font-semibold">{data[hover].detail}</b>: {data[hover].value} {unit}
+          <b className="font-semibold">{data[hover].detail}</b>:{" "}
+          {data[hover].value} {unit}
         </Tooltip>
       ) : null}
       <table className="sr-only">
@@ -272,13 +311,14 @@ export function LineChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const clip = useId();
-  const width = 520;
+  const [ref, width] = useWidth();
   const right = 56; // room for the direct labels at the line ends
   const grid = ticks(Math.max(...series.flatMap((s) => s.values)));
   const top = grid[grid.length - 1];
   const plotW = width - PAD.left - right;
   const plotH = height - PAD.top - PAD.bottom;
-  const x = (i: number) => PAD.left + (days.length > 1 ? (i / (days.length - 1)) * plotW : 0);
+  const x = (i: number) =>
+    PAD.left + (days.length > 1 ? (i / (days.length - 1)) * plotW : 0);
   const y = (v: number) => PAD.top + plotH - (v / top) * plotH;
   const last = days.length - 1;
 
@@ -302,111 +342,125 @@ export function LineChart({
 
   return (
     <div className="relative px-3 pt-2 pb-3">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-auto w-full touch-none overflow-visible"
-        role="img"
-        aria-label={series
-          .map((s) => `${s.name}: ${s.values[0] ?? 0} on ${dayLabel(days[0])}, ${s.values[last] ?? 0} today`)
-          .join(". ")}
-        onPointerMove={onMove}
-        onPointerDown={onMove}
-        onPointerLeave={() => setHover(null)}
-      >
-        <defs>
-          <clipPath id={clip}>
-            <rect x={PAD.left} y={0} width={plotW + 4} height={height} />
-          </clipPath>
-        </defs>
-        {grid.map((v) => (
-          <g key={v}>
+      <div ref={ref}>
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          className="block w-full touch-none overflow-visible"
+          role="img"
+          aria-label={series
+            .map(
+              (s) =>
+                `${s.name}: ${s.values[0] ?? 0} on ${dayLabel(days[0])}, ${s.values[last] ?? 0} today`,
+            )
+            .join(". ")}
+          onPointerMove={onMove}
+          onPointerDown={onMove}
+          onPointerLeave={() => setHover(null)}
+        >
+          <defs>
+            <clipPath id={clip}>
+              <rect x={PAD.left} y={0} width={plotW + 4} height={height} />
+            </clipPath>
+          </defs>
+          {grid.map((v) => (
+            <g key={v}>
+              <line
+                x1={PAD.left}
+                x2={PAD.left + plotW}
+                y1={y(v)}
+                y2={y(v)}
+                stroke="var(--border)"
+              />
+              <text
+                x={PAD.left - 6}
+                y={y(v)}
+                dy="0.32em"
+                textAnchor="end"
+                className="fill-[var(--text-faint)] text-[11px] tabular-nums"
+              >
+                {v}
+              </text>
+            </g>
+          ))}
+          {days.map((d, i) =>
+            i % labelEvery === 0 || i === last ? (
+              <text
+                key={d}
+                x={x(i)}
+                y={height - 6}
+                textAnchor={i === 0 ? "start" : i === last ? "end" : "middle"}
+                className="fill-[var(--text-faint)] text-[11px]"
+              >
+                {i === last ? "Today" : dayLabel(d)}
+              </text>
+            ) : null,
+          )}
+          {hover !== null ? (
             <line
-              x1={PAD.left}
-              x2={PAD.left + plotW}
-              y1={y(v)}
-              y2={y(v)}
-              stroke="var(--border)"
+              x1={x(hover)}
+              x2={x(hover)}
+              y1={PAD.top}
+              y2={PAD.top + plotH}
+              stroke="var(--border-strong)"
             />
-            <text
-              x={PAD.left - 6}
-              y={y(v)}
-              dy="0.32em"
-              textAnchor="end"
-              className="fill-[var(--text-faint)] text-[11px] tabular-nums"
-            >
-              {v}
-            </text>
+          ) : null}
+          <g clipPath={`url(#${clip})`}>
+            {series.map((s) => (
+              <polyline
+                key={s.key}
+                points={s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                strokeDasharray={s.dashed ? "5 4" : undefined}
+              />
+            ))}
           </g>
-        ))}
-        {days.map((d, i) =>
-          i % labelEvery === 0 || i === last ? (
-            <text
-              key={d}
-              x={x(i)}
-              y={height - 6}
-              textAnchor={i === 0 ? "start" : i === last ? "end" : "middle"}
-              className="fill-[var(--text-faint)] text-[11px]"
-            >
-              {i === last ? "Today" : dayLabel(d)}
-            </text>
-          ) : null,
-        )}
-        {hover !== null ? (
-          <line
-            x1={x(hover)}
-            x2={x(hover)}
-            y1={PAD.top}
-            y2={PAD.top + plotH}
-            stroke="var(--border-strong)"
-          />
-        ) : null}
-        <g clipPath={`url(#${clip})`}>
           {series.map((s) => (
-            <polyline
+            <circle
               key={s.key}
-              points={s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}
-              fill="none"
-              stroke={s.color}
+              cx={x(hover ?? last)}
+              cy={y(s.values[hover ?? last] ?? 0)}
+              r={4}
+              fill={s.color}
+              stroke="var(--surface)"
               strokeWidth={2}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              strokeDasharray={s.dashed ? "5 4" : undefined}
             />
           ))}
-        </g>
-        {series.map((s) => (
-          <circle
-            key={s.key}
-            cx={x(hover ?? last)}
-            cy={y(s.values[hover ?? last] ?? 0)}
-            r={4}
-            fill={s.color}
-            stroke="var(--surface)"
-            strokeWidth={2}
-          />
-        ))}
-        {ends.map(({ s, y: ly }) => (
-          <text
-            key={s.key}
-            x={PAD.left + plotW + 8}
-            y={ly}
-            dy="0.32em"
-            className="fill-[var(--text-muted)] text-[11px]"
-          >
-            {s.name}
-          </text>
-        ))}
-      </svg>
+          {ends.map(({ s, y: ly }) => (
+            <text
+              key={s.key}
+              x={PAD.left + plotW + 8}
+              y={ly}
+              dy="0.32em"
+              className="fill-[var(--text-muted)] text-[11px]"
+            >
+              {s.name}
+            </text>
+          ))}
+        </svg>
+      </div>
       {hover !== null ? (
         <Tooltip
           className={cn("top-0", hover > last / 2 ? "left-14" : "right-16")}
         >
-          <span className="mb-0.5 block font-semibold">{dayLabel(days[hover])}</span>
+          <span className="mb-0.5 block font-semibold">
+            {dayLabel(days[hover])}
+          </span>
           {series.map((s) => (
             <span key={s.key} className="flex items-center gap-1.5">
-              <span className="h-0.5 w-3 rounded" style={{ background: s.color }} />
+              <span
+                className="h-0.5 w-3 rounded"
+                style={{ background: s.color }}
+              />
               {s.name}
-              <b className="ml-auto pl-3 font-semibold tabular-nums">{s.values[hover]}</b>
+              <b className="ml-auto pl-3 font-semibold tabular-nums">
+                {s.values[hover]}
+              </b>
             </span>
           ))}
         </Tooltip>
@@ -436,7 +490,11 @@ export function LineChart({
 }
 
 /** A legend row for charts with two or more series. */
-export function Legend({ series }: { series: Pick<LineSeries, "key" | "name" | "color" | "dashed">[] }) {
+export function Legend({
+  series,
+}: {
+  series: Pick<LineSeries, "key" | "name" | "color" | "dashed">[];
+}) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 pt-3 text-xs text-muted">
       {series.map((s) => (
