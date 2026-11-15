@@ -6,6 +6,7 @@ import {
   CalendarDays,
   CalendarRange,
   Check,
+  BookmarkPlus,
   CircleDot,
   Flag,
   Tag,
@@ -18,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { Dialog as D } from "radix-ui";
+import { toast } from "sonner";
 import * as actions from "@/actions";
 import { Avatar, Pill } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
@@ -200,6 +202,18 @@ function PanelBody({ itemId, onClose }: { itemId: string; onClose: () => void })
               <MoreHorizontal size={16} />
             </MenuTrigger>
             <MenuContent align="end">
+              <MenuItem
+                onSelect={async () => {
+                  const result = await store.run(() =>
+                    actions.saveItemTemplate({ id: clientId(), itemId, name: item.title }),
+                  );
+                  if (result.ok) {
+                    toast.success("Saved as a template. Find it next to New item.");
+                  }
+                }}
+              >
+                <BookmarkPlus size={14} /> Save as template
+              </MenuItem>
               <MenuItem
                 danger
                 onSelect={() => {

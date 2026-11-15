@@ -7,6 +7,8 @@ import {
   itemLink,
   label,
   notification,
+  page,
+  template,
   project,
   status,
   user,
@@ -21,6 +23,9 @@ import type {
   ItemLite,
   LabelLite,
   Member,
+  PageFull,
+  PageLite,
+  TemplateLite,
   NotificationEntry,
   Priority,
   ProjectFull,
@@ -247,16 +252,73 @@ export async function getAllLabels(userId: string): Promise<LabelLite[]> {
     .orderBy(asc(label.position), asc(label.createdAt));
 }
 
+export async function getPages(projectId: string): Promise<PageLite[]> {
+  const rows = await db
+    .select({
+      id: page.id,
+      projectId: page.projectId,
+      title: page.title,
+      position: page.position,
+      updatedAt: page.updatedAt,
+    })
+    .from(page)
+    .where(eq(page.projectId, projectId))
+    .orderBy(asc(page.position), asc(page.createdAt));
+  return rows.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() }));
+}
+
+/** One page with its body, if the user may see it. */
+export async function getPage(userId: string, pageId: string): Promise<PageFull | null> {
+  const [row] = await db
+    .select({
+      id: page.id,
+      projectId: page.projectId,
+      title: page.title,
+      position: page.position,
+      updatedAt: page.updatedAt,
+      body: page.body,
+      updatedByName: user.name,
+    })
+    .from(page)
+    .innerJoin(
+      workspaceMember,
+      and(eq(workspaceMember.workspaceId, page.workspaceId), eq(workspaceMember.userId, userId)),
+    )
+    .leftJoin(user, eq(user.id, page.updatedBy))
+    .where(eq(page.id, pageId));
+  if (!row) return null;
+  return { ...row, updatedAt: row.updatedAt.toISOString() };
+}
+
+export async function getTemplates(workspaceId: string): Promise<TemplateLite[]> {
+  const rows = await db
+    .select({
+      id: template.id,
+      workspaceId: template.workspaceId,
+      kind: template.kind,
+      name: template.name,
+      title: template.title,
+      body: template.body,
+      data: template.data,
+    })
+    .from(template)
+    .where(eq(template.workspaceId, workspaceId))
+    .orderBy(asc(template.name));
+  return rows.map((r) => ({ ...r, kind: r.kind === "item" ? "item" : "page" }));
+}
+
 export async function getProjectBoard(userId: string, projectId: string) {
   const proj = await getProject(userId, projectId);
   if (!proj) return null;
-  const [statuses, items, members, labels] = await Promise.all([
+  const [statuses, items, members, labels, pages, templates] = await Promise.all([
     getStatuses(projectId),
     getProjectItems(projectId),
     getMembers(proj.workspaceId),
     getLabels(proj.workspaceId),
+    getPages(projectId),
+    getTemplates(proj.workspaceId),
   ]);
-  return { project: proj, statuses, items, members, labels };
+  return { project: proj, statuses, items, members, labels, pages, templates };
 }
 
 function toActivityEntry(row: {

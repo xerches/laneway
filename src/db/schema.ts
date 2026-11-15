@@ -260,3 +260,56 @@ export const itemLink = pgTable(
   },
   (t) => [index("item_link_item_idx").on(t.itemId)],
 );
+
+/** A Markdown document that lives in a project: notes, briefs, decisions. */
+export const page = pgTable(
+  "page",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    position: doublePrecision("position").notNull().default(0),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("page_project_idx").on(t.projectId)],
+);
+
+export type ItemTemplateData = {
+  priority?: string;
+  labelIds?: string[];
+  subtasks?: string[];
+  /** Due this many days after the item is made. */
+  dueIn?: number | null;
+};
+
+/**
+ * Templates someone saved in a workspace. "page" templates hold a title and
+ * a Markdown body; "item" templates also hold labels, priority and subtasks.
+ */
+export const template = pgTable(
+  "template",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspace.id, { onDelete: "cascade" }),
+    // page | item
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    data: jsonb("data").$type<ItemTemplateData>(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("template_workspace_idx").on(t.workspaceId, t.kind)],
+);

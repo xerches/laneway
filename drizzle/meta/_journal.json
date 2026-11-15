@@ -15,6 +15,13 @@
       "when": 1794763005230,
       "tag": "0001_dark_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794763636367,
+      "tag": "0002_easy_bloodaxe",
+      "breakpoints": true
     }
   ]
 }

@@ -5,11 +5,11 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { COLORS } from "@/lib/colors";
 import { isSafeLink, normalizeLink } from "@/lib/links";
-import { getItemDetail, getWorkspaces, searchItems } from "@/lib/data";
+import { getItemDetail, getPage, getWorkspaces, searchItems } from "@/lib/data";
 import * as m from "@/lib/mutations";
 import { requireUser } from "@/lib/session";
 import { TEMPLATES } from "@/lib/templates";
-import type { ActionResult, ItemDetail } from "@/lib/types";
+import type { ActionResult, ItemDetail, PageFull } from "@/lib/types";
 import type { SearchHit } from "@/lib/data";
 
 /**
@@ -373,6 +373,105 @@ export async function removeItemLink(input: { linkId: string }) {
   return run(async () => {
     const data = z.object({ linkId: id }).parse(input);
     await m.removeItemLink(user, data.linkId);
+  });
+}
+
+// --------------------------------------------------------------------- pages
+
+const pageTitle = z.string().trim().max(200);
+const pageBody = z.string().max(200_000);
+
+export async function createPage(input: {
+  id: string;
+  projectId: string;
+  title: string;
+  body: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, projectId: id, title: pageTitle, body: pageBody })
+      .parse(input);
+    await m.createPage(user, data);
+    return { pageId: data.id };
+  });
+}
+
+export async function updatePage(input: { pageId: string; title?: string; body?: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ pageId: id, title: pageTitle.optional(), body: pageBody.optional() })
+      .parse(input);
+    const { pageId, ...patch } = data;
+    await m.updatePage(user, pageId, patch);
+  });
+}
+
+export async function deletePage(input: { pageId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ pageId: id }).parse(input);
+    await m.deletePage(user, data.pageId);
+  });
+}
+
+export async function loadPage(pageId: string): Promise<PageFull | null> {
+  const user = await requireUser();
+  if (!id.safeParse(pageId).success) return null;
+  return getPage(user.id, pageId);
+}
+
+// ----------------------------------------------------------------- templates
+
+const templateName = z.string().trim().min(1).max(80);
+
+export async function savePageTemplate(input: {
+  id: string;
+  workspaceId: string;
+  name: string;
+  title: string;
+  body: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, workspaceId: id, name: templateName, title: pageTitle, body: pageBody })
+      .parse(input);
+    await m.createTemplate(user, { ...data, kind: "page" });
+  });
+}
+
+export async function saveItemTemplate(input: { id: string; itemId: string; name: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ id, itemId: id, name: templateName }).parse(input);
+    await m.saveItemAsTemplate(user, data.itemId, { id: data.id, name: data.name });
+  });
+}
+
+export async function deleteTemplate(input: { templateId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ templateId: id }).parse(input);
+    await m.deleteTemplate(user, data.templateId);
+  });
+}
+
+export async function createItemFromTemplate(input: {
+  id: string;
+  projectId: string;
+  templateId: string;
+  statusId?: string | null;
+  today: string;
+}) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ id, projectId: id, templateId: id, statusId: id.nullish(), today: day })
+      .parse(input);
+    await m.createItemFromTemplate(user, data);
+    return { itemId: data.id };
   });
 }
 

@@ -26,11 +26,16 @@ This is phase 1 (the personal MVP). What works today:
   or drag its ends to change the start or due date.
 - **My week**: what's overdue, due each day and in progress, across every
   workspace.
-- Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` to `4`
+- **Pages** in every project: Markdown notes with tables and checklists you
+  can tick while reading. Start blank or from a template (project brief,
+  meeting notes, decision record, weekly review, trip plan), or save your own.
+- **Item templates**: save any item, with its labels, priority and subtasks,
+  and make new ones from it under New item.
+- Search and shortcuts: `Ctrl/⌘ K` to search, `C` for a new item, `1` to `5`
   to switch views.
 - Works on a phone browser, in light and dark mode.
 
-Planned next: pages and page templates, custom dashboards, automations, an
+Planned next: custom dashboards, automations, an
 API for assistants, GitHub and ClickUp connections, then teams.
 
 ## Run it on your computer

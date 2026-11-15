@@ -8,11 +8,14 @@ import {
   itemLink,
   label,
   notification,
+  page,
+  template,
   project,
   status,
   user,
   workspace,
   workspaceMember,
+  type ItemTemplateData,
   type Recurrence,
 } from "@/db/schema";
 import {
@@ -764,6 +767,153 @@ export async function removeItemLink(actor: { id: string }, linkId: string) {
   if (!row) return;
   await requireRole(actor.id, row.workspaceId);
   await db.delete(itemLink).where(eq(itemLink.id, linkId));
+}
+
+// --------------------------------------------------------------------- pages
+
+async function loadPage(pageId: string) {
+  const [row] = await db.select().from(page).where(eq(page.id, pageId));
+  if (!row) throw new MutationError("That page no longer exists.");
+  return row;
+}
+
+export async function createPage(
+  actor: { id: string },
+  input: { id: string; projectId: string; title: string; body: string },
+) {
+  const proj = await loadProject(input.projectId);
+  await requireRole(actor.id, proj.workspaceId);
+  const [{ next }] = await db
+    .select({ next: sql<number>`coalesce(max(${page.position}), 0) + 1` })
+    .from(page)
+    .where(eq(page.projectId, proj.id));
+  await db.insert(page).values({
+    ...input,
+    workspaceId: proj.workspaceId,
+    position: next,
+    createdBy: actor.id,
+    updatedBy: actor.id,
+  });
+}
+
+export async function updatePage(
+  actor: { id: string },
+  pageId: string,
+  patch: { title?: string; body?: string },
+) {
+  const row = await loadPage(pageId);
+  await requireRole(actor.id, row.workspaceId);
+  await db
+    .update(page)
+    .set({ ...patch, updatedBy: actor.id, updatedAt: new Date() })
+    .where(eq(page.id, pageId));
+}
+
+export async function deletePage(actor: { id: string }, pageId: string) {
+  const [row] = await db.select().from(page).where(eq(page.id, pageId));
+  if (!row) return;
+  await requireRole(actor.id, row.workspaceId);
+  await db.delete(page).where(eq(page.id, pageId));
+}
+
+// ----------------------------------------------------------------- templates
+
+export async function createTemplate(
+  actor: { id: string },
+  input: {
+    id: string;
+    workspaceId: string;
+    kind: "page" | "item";
+    name: string;
+    title: string;
+    body: string;
+    data?: ItemTemplateData | null;
+  },
+) {
+  await requireRole(actor.id, input.workspaceId);
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(template)
+    .where(eq(template.workspaceId, input.workspaceId));
+  if (n >= 200) throw new MutationError("This workspace has the most templates it can hold.");
+  await db.insert(template).values({ ...input, data: input.data ?? null, createdBy: actor.id });
+}
+
+export async function deleteTemplate(actor: { id: string }, templateId: string) {
+  const [row] = await db.select().from(template).where(eq(template.id, templateId));
+  if (!row) return;
+  await requireRole(actor.id, row.workspaceId);
+  await db.delete(template).where(eq(template.id, templateId));
+}
+
+/** Saves an item's title, description, priority, labels and subtasks as a template. */
+export async function saveItemAsTemplate(
+  actor: { id: string },
+  itemId: string,
+  input: { id: string; name: string },
+) {
+  const current = await loadItem(itemId);
+  await requireRole(actor.id, current.workspaceId);
+  const [subs, labels] = await Promise.all([
+    db
+      .select({ title: item.title })
+      .from(item)
+      .where(eq(item.parentId, itemId))
+      .orderBy(asc(item.position), asc(item.createdAt)),
+    db.select({ labelId: itemLabel.labelId }).from(itemLabel).where(eq(itemLabel.itemId, itemId)),
+  ]);
+  await createTemplate(actor, {
+    id: input.id,
+    workspaceId: current.workspaceId,
+    kind: "item",
+    name: input.name,
+    title: current.title,
+    body: current.description,
+    data: {
+      priority: current.priority,
+      labelIds: labels.map((l) => l.labelId),
+      subtasks: subs.map((s) => s.title).slice(0, 50),
+      dueIn: null,
+    },
+  });
+}
+
+/** Makes a new item, with its subtasks, from an item template. */
+export async function createItemFromTemplate(
+  actor: { id: string },
+  input: { id: string; projectId: string; templateId: string; statusId?: string | null; today: string },
+) {
+  const proj = await loadProject(input.projectId);
+  await requireRole(actor.id, proj.workspaceId);
+  const [tpl] = await db
+    .select()
+    .from(template)
+    .where(and(eq(template.id, input.templateId), eq(template.workspaceId, proj.workspaceId)));
+  if (!tpl || tpl.kind !== "item") throw new MutationError("That template no longer exists.");
+  const data = tpl.data ?? {};
+  const priority = (["none", "low", "medium", "high", "urgent"] as const).find(
+    (p) => p === data.priority,
+  );
+  await insertItem(actor.id, {
+    id: input.id,
+    projectId: proj.id,
+    title: tpl.title || tpl.name,
+    description: tpl.body,
+    statusId: input.statusId ?? null,
+    priority: priority ?? "none",
+    labelIds: data.labelIds ?? [],
+    dueDate:
+      typeof data.dueIn === "number" ? addDaysTo(input.today, data.dueIn) : null,
+    source: "template",
+  });
+  for (const title of data.subtasks ?? []) {
+    await insertItem(actor.id, {
+      projectId: proj.id,
+      title: title.slice(0, 300),
+      parentId: input.id,
+      source: "template",
+    });
+  }
 }
 
 // ------------------------------------------------------------- notifications
