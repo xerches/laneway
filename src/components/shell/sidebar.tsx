@@ -17,6 +17,7 @@ import {
   Settings,
   Zap,
 } from "lucide-react";
+import { ThemeSwitch } from "@/components/theme";
 import { toast } from "sonner";
 import { createWorkspace, updateWorkspace } from "@/actions";
 import { Wordmark } from "@/components/logo";
@@ -190,7 +191,10 @@ export function Sidebar() {
         </button>
       </nav>
 
-      <div className="flex shrink-0 items-center gap-2.5 border-t border-line px-3 py-2.5">
+      <div className="shrink-0 border-t border-line px-3 pt-2.5">
+        <ThemeSwitch />
+      </div>
+      <div className="flex shrink-0 items-center gap-2.5 px-3 py-2.5">
         <Avatar name={user.name} id={user.id} size={28} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium">{user.name}</p>

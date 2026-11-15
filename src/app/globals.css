@@ -42,8 +42,12 @@
   --c-pink-fg: #ffffff;
 }
 
+/*
+ * Dark colors. They follow the system setting unless someone picks Light or
+ * Dark in the app, which sets data-theme on <html> (see ThemeScript).
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #101216;
     --surface: #181b20;
     --surface-2: #21252c;
@@ -58,6 +62,22 @@
     --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
     --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #101216;
+  --surface: #181b20;
+  --surface-2: #21252c;
+  --border: #2a2f37;
+  --border-strong: #3a414c;
+  --text: #eceef1;
+  --text-muted: #a3aab6;
+  --text-faint: #737b88;
+  --accent: #7c74ff;
+  --accent-fg: #ffffff;
+  --danger: #f0616d;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
 }
 
 @theme inline {
@@ -80,6 +100,16 @@
 
 html {
   color-scheme: light dark;
+}
+
+html[data-theme="light"],
+html[data-theme="light"] input[type="date"] {
+  color-scheme: light;
+}
+
+html[data-theme="dark"],
+html[data-theme="dark"] input[type="date"] {
+  color-scheme: dark;
 }
 
 body {

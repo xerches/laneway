@@ -11,13 +11,17 @@ import {
   Inbox,
   KanbanSquare,
   List,
+  Monitor,
+  Moon,
   Plus,
   Search,
   Settings,
+  Sun,
   Zap,
 } from "lucide-react";
 import { Dialog as D } from "radix-ui";
 import { searchAllItems } from "@/actions";
+import { setTheme, useTheme } from "@/components/theme";
 import { Dot, Kbd } from "@/components/ui/bits";
 import type { SearchHit } from "@/lib/data";
 import { colorFg, colorVar } from "@/lib/colors";
@@ -41,6 +45,7 @@ export function CommandPalette({
   const pathname = usePathname();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const theme = useTheme();
 
   const projectMatch = pathname.match(/^\/w\/([a-z0-9]+)\/p\/([a-z0-9]+)/);
 
@@ -134,6 +139,28 @@ export function CommandPalette({
                     <Kbd>C</Kbd>
                   </Command.Item>
                 ) : null}
+                {(
+                  [
+                    ["dark", "Use dark mode", Moon],
+                    ["light", "Use light mode", Sun],
+                    ["system", "Match the system appearance", Monitor],
+                  ] as const
+                )
+                  .filter(([value]) => value !== theme)
+                  .map(([value, label, Icon]) => (
+                    <Command.Item
+                      key={value}
+                      value={`theme appearance ${value} mode ${label}`}
+                      onSelect={() => {
+                        setTheme(value);
+                        close();
+                      }}
+                      className={itemClass}
+                    >
+                      <Icon size={15} className="text-muted" />
+                      {label}
+                    </Command.Item>
+                  ))}
                 <Command.Item
                   value="new project create board"
                   onSelect={() => openNewProject(projectMatch?.[1])}
