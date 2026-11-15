@@ -40,7 +40,7 @@ export function BarList({
   }
 
   return (
-    <div className="px-4 py-3">
+    <div className="relative px-4 py-3">
       <ul className="flex flex-col gap-1" aria-hidden>
         {data.map((d) => {
           const pct = sum ? Math.round((d.value / sum) * 100) : 0;
