@@ -36,7 +36,7 @@ export const WIDGETS: WidgetMeta[] = [
   { type: "work-list", name: "Up next", description: "Open items by due date; the counters filter it", size: "half", perProject: false, group: "Lists" },
   { type: "due-soon", name: "Due soon", description: "Open items due in the next 7 days", size: "half", perProject: true, group: "Lists" },
   { type: "overdue", name: "Overdue", description: "Open items past their due date", size: "half", perProject: true, group: "Lists" },
-  { type: "two-weeks", name: "Next 14 days", description: "What's due on each of the next 14 days", size: "half", perProject: false, group: "Lists" },
+  { type: "two-weeks", name: "Next 30 days", description: "A calendar of what's due over the next 30 days", size: "full", perProject: false, group: "Lists" },
   { type: "by-status", name: "Items by status", description: "Open items in each status", size: "half", perProject: true, group: "Charts" },
   { type: "by-priority", name: "Items by priority", description: "Open items at each priority", size: "half", perProject: true, group: "Charts" },
   { type: "by-label", name: "Items by label", description: "Open items with each label", size: "half", perProject: true, group: "Charts" },
@@ -50,12 +50,12 @@ export function widgetMeta(type: string): WidgetMeta | undefined {
 
 const DEFAULT_TYPES: [WidgetType, WidgetSize][] = [
   ["counters", "full"],
+  ["two-weeks", "full"],
   ["work-list", "half"],
   ["projects", "half"],
-  ["two-weeks", "half"],
-  ["activity", "half"],
   ["by-status", "half"],
   ["done-per-week", "half"],
+  ["activity", "full"],
 ];
 
 /** The layout a dashboard starts with until someone customizes it. */

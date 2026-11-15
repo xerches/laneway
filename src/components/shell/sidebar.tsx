@@ -4,6 +4,7 @@ import { useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BookOpen,
   CalendarCheck,
   ChevronRight,
   Folder,
@@ -138,7 +139,7 @@ export function Sidebar() {
                     <MoreHorizontal size={14} />
                   </MenuTrigger>
                   <MenuContent>
-                    <MenuItem onSelect={() => setEditing(ws)}>Rename or recolor</MenuItem>
+                    <MenuItem onSelect={() => setEditing(ws)}>Edit name, color and wiki</MenuItem>
                     <MenuItem onSelect={() => openNewProject(ws.id)}>New project</MenuItem>
                     <MenuItem onSelect={() => router.push(`/w/${ws.id}/automations`)}>
                       <Zap size={14} /> Automations
@@ -158,6 +159,18 @@ export function Sidebar() {
                 hidden={!open}
                 className="mt-0.5 ml-[18px] flex flex-col border-l border-line pl-1.5"
               >
+                {ws.wikiUrl ? (
+                  <a
+                    href={ws.wikiUrl}
+                    target={ws.wikiUrl.startsWith("http") ? "_blank" : undefined}
+                    rel="noreferrer"
+                    title={ws.wikiUrl.startsWith("obsidian:") ? "Opens in Obsidian" : ws.wikiUrl}
+                    className={cn(navItem, "pl-2 text-muted")}
+                  >
+                    <BookOpen size={13} className="shrink-0" />
+                    <span className="truncate">Wiki</span>
+                  </a>
+                ) : null}
                 {mine.map((p) => {
                   const href = `/w/${ws.id}/p/${p.id}`;
                   return (
@@ -203,7 +216,7 @@ export function Sidebar() {
         <Link
           href="/settings"
           aria-label="Settings"
-          title="Settings: API tokens, Claude and GitHub"
+          title="Settings: appearance, API tokens, Claude and GitHub"
           className={cn(
             "rounded-md p-1.5 text-faint hover:bg-surface-2 hover:text-ink",
             pathname === "/settings" && "bg-surface-2 text-ink",
@@ -263,6 +276,7 @@ function WorkspaceForm({
   const isNew = target === "new";
   const [name, setName] = useState(isNew ? "" : target.name);
   const [color, setColor] = useState<string>(() => (isNew ? randomColor() : target.color));
+  const [wikiUrl, setWikiUrl] = useState(isNew ? "" : target.wikiUrl);
   const [pending, startTransition] = useTransition();
 
   function submit(event: React.FormEvent) {
@@ -271,7 +285,7 @@ function WorkspaceForm({
     startTransition(async () => {
       const result = isNew
         ? await createWorkspace({ name, color })
-        : await updateWorkspace({ workspaceId: target.id, name, color });
+        : await updateWorkspace({ workspaceId: target.id, name, color, wikiUrl });
       if (!result.ok) {
         toast.error(result.error);
         return;
@@ -297,6 +311,21 @@ function WorkspaceForm({
         Color
         <ColorSwatches value={color} onChange={setColor} />
       </div>
+      {isNew ? null : (
+        <label className="flex flex-col gap-1.5 text-[13px] font-medium">
+          Wiki link
+          <Input
+            value={wikiUrl}
+            onChange={(e) => setWikiUrl(e.target.value)}
+            maxLength={2000}
+            placeholder="obsidian://open?vault=MyVault&file=Wiki"
+          />
+          <span className="font-normal text-faint">
+            Shows a Wiki link above this workspace&apos;s projects. In Obsidian, right-click a
+            note and pick Copy Obsidian URL.
+          </span>
+        </label>
+      )}
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel

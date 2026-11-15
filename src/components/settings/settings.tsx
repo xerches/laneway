@@ -5,11 +5,13 @@ import { formatDistanceToNowStrict } from "date-fns";
 import {
   AlertCircle,
   Bot,
+  CalendarDays,
   Check,
   Copy,
   FileUp,
   GitPullRequest,
   KeyRound,
+  Palette,
   Plus,
   RefreshCw,
   Trash2,
@@ -18,7 +20,9 @@ import Link from "next/link";
 import { toast } from "sonner";
 import {
   createApiToken,
+  createCalendarFeed,
   createGithubHook,
+  deleteCalendarFeed,
   deleteGithubHook,
   importFile,
   newGithubHookSecret,
@@ -26,11 +30,20 @@ import {
   revokeApiToken,
   setGithubHookOnMerge,
 } from "@/actions";
+import {
+  ACCENTS,
+  DARK_BACKGROUNDS,
+  ThemeSwitch,
+  setAccent,
+  setDarkBackground,
+  useAccent,
+  useDarkBackground,
+} from "@/components/theme";
 import { Dot } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { clientId } from "@/lib/client";
-import type { ApiTokenLite, GithubHookLite } from "@/lib/data";
+import type { ApiTokenLite, CalendarFeedLite, GithubHookLite } from "@/lib/data";
 import type { ImportPreview } from "@/lib/import";
 import type { ImportResult } from "@/lib/import-run";
 import type { WorkspaceLite } from "@/lib/types";
@@ -48,11 +61,13 @@ export function SettingsView({
   workspaces,
   tokens,
   hooks,
+  feeds,
   baseUrl,
 }: {
   workspaces: WorkspaceLite[];
   tokens: ApiTokenLite[];
   hooks: GithubHookLite[];
+  feeds: CalendarFeedLite[];
   baseUrl: string;
 }) {
   // The token just made, shown once and filled into the setup snippets.
@@ -64,10 +79,13 @@ export function SettingsView({
         <header>
           <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
           <p className="text-[13px] text-muted">
-            Connect Laneway to Claude, your own scripts and GitHub, or import a plan.
+            Pick your colors, put due dates in your calendar, connect Laneway to Claude, your
+            own scripts and GitHub, or import a plan.
           </p>
         </header>
 
+        <Appearance />
+        <Calendars workspaces={workspaces} feeds={feeds} baseUrl={baseUrl} />
         <Tokens
           workspaces={workspaces}
           tokens={tokens}
@@ -102,6 +120,273 @@ function Section({
       <div className="mt-1 text-[13px] leading-relaxed text-muted">{description}</div>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+function Appearance() {
+  const accent = useAccent();
+  const dark = useDarkBackground();
+  return (
+    <Section
+      icon={<Palette size={16} className="text-muted" />}
+      title="Appearance"
+      description="Saved on this device, so your phone and laptop can each have their own."
+    >
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-2">
+          <h3 className="text-[13px] font-medium">Mode</h3>
+          <ThemeSwitch className="max-w-xs" />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <h3 id="accent-label" className="text-[13px] font-medium">
+            Accent color
+          </h3>
+          <p className="-mt-1 text-[12px] text-faint">Buttons, links, today&apos;s date and selections.</p>
+          <div role="radiogroup" aria-labelledby="accent-label" className="flex flex-wrap gap-2">
+            {ACCENTS.map((a) => (
+              <button
+                key={a.value}
+                role="radio"
+                aria-checked={accent === a.value}
+                onClick={() => setAccent(a.value)}
+                className={cn(
+                  "flex h-8 items-center gap-2 rounded-lg border px-2.5 text-[13px] transition-colors",
+                  accent === a.value
+                    ? "border-accent bg-accent/8 text-ink"
+                    : "border-line text-muted hover:border-line-strong hover:text-ink",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className="h-3.5 w-3.5 rounded-full"
+                  style={{ background: a.swatch }}
+                />
+                {a.label}
+                {accent === a.value ? <Check size={13} /> : null}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <h3 id="dark-label" className="text-[13px] font-medium">
+            Dark mode background
+          </h3>
+          <div
+            role="radiogroup"
+            aria-labelledby="dark-label"
+            className="grid grid-cols-1 gap-2 sm:grid-cols-3"
+          >
+            {DARK_BACKGROUNDS.map((d) => (
+              <button
+                key={d.value}
+                role="radio"
+                aria-checked={dark === d.value}
+                onClick={() => setDarkBackground(d.value)}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg border p-2.5 text-left transition-colors",
+                  dark === d.value
+                    ? "border-accent bg-accent/8"
+                    : "border-line hover:border-line-strong",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className="h-8 w-8 shrink-0 rounded-md border border-white/10"
+                  style={{ background: d.swatch }}
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-ink">{d.label}</span>
+                  <span className="block text-[12px] text-faint">{d.hint}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+// ------------------------------------------------------------------ calendar
+
+function Calendars({
+  workspaces,
+  feeds,
+  baseUrl,
+}: {
+  workspaces: WorkspaceLite[];
+  feeds: CalendarFeedLite[];
+  baseUrl: string;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("Laneway");
+  // Work stays out unless you tick it, like API tokens.
+  const [picked, setPicked] = useState<string[]>(
+    workspaces.filter((w) => w.kind !== "work").map((w) => w.id),
+  );
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const nameOf = (id: string) => workspaces.find((w) => w.id === id);
+  const httpsLink = (id: string) => `${baseUrl}/api/calendar/${id}.ics`;
+  const webcalLink = (id: string) => httpsLink(id).replace(/^https?:/, "webcal:");
+
+  function create() {
+    startTransition(async () => {
+      const result = await createCalendarFeed({ name: name.trim(), workspaceIds: picked });
+      if (!result.ok) return void toast.error(result.error);
+      setAdding(false);
+    });
+  }
+
+  function remove(feed: CalendarFeedLite) {
+    startTransition(async () => {
+      const result = await deleteCalendarFeed({ feedId: feed.id });
+      if (!result.ok) toast.error(result.error);
+      else toast.success(`Deleted “${feed.name}”. Calendars using it stop updating.`);
+      setConfirming(null);
+    });
+  }
+
+  return (
+    <Section
+      icon={<CalendarDays size={16} className="text-accent" />}
+      title="Calendar"
+      description={
+        <>
+          Show due dates in Apple Calendar, Google Calendar or Outlook. They appear as a
+          read-only calendar that refreshes about every hour; change dates here in Laneway.
+          Keep the link private: anyone who has it can read those due dates.
+        </>
+      }
+    >
+      {feeds.length ? (
+        <ul className="flex flex-col gap-3">
+          {feeds.map((f) => (
+            <li key={f.id} className="rounded-lg border border-line p-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-medium">{f.name}</p>
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted">
+                    {(f.workspaceIds ?? workspaces.map((w) => w.id)).map((id) => {
+                      const ws = nameOf(id);
+                      return ws ? (
+                        <span key={id} className="inline-flex items-center gap-1">
+                          <Dot color={ws.color} /> {ws.name}
+                        </span>
+                      ) : null;
+                    })}
+                    <span className="text-faint" suppressHydrationWarning>
+                      · Last refreshed {ago(f.lastFetchedAt)}
+                    </span>
+                  </p>
+                </div>
+                {confirming === f.id ? (
+                  <div className="flex items-center gap-1.5">
+                    <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
+                      Keep
+                    </Button>
+                    <Button size="sm" variant="danger" disabled={pending} onClick={() => remove(f)}>
+                      Delete
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Delete ${f.name}`}
+                    onClick={() => setConfirming(f.id)}
+                  >
+                    <Trash2 size={14} /> Delete
+                  </Button>
+                )}
+              </div>
+              <div className="mt-3 flex flex-col gap-2">
+                <Snippet text={httpsLink(f.id)} />
+                <p className="text-[12px] leading-relaxed text-faint">
+                  <a href={webcalLink(f.id)} className="font-medium text-accent hover:underline">
+                    Open in Apple Calendar
+                  </a>{" "}
+                  on this device, or in Calendar choose File → New Calendar Subscription and paste
+                  the link. On iPhone, add it in Settings under Calendar accounts: Add Account → Other
+                  → Add Subscribed Calendar. On a Mac, pick “On My Mac” rather than iCloud, so the
+                  Mac fetches it itself.
+                </p>
+                {/^https?:\/\/(localhost|127\.)/.test(baseUrl) ? (
+                  <p className="text-[12px] leading-relaxed text-faint">
+                    This link uses localhost, which only works on this computer. Open Settings from
+                    the address your other devices use (for example your Tailscale address) to get a
+                    link for them.
+                  </p>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {adding ? (
+        <form
+          className={cn("flex flex-col gap-3", feeds.length && "mt-4")}
+          onSubmit={(e) => {
+            e.preventDefault();
+            create();
+          }}
+        >
+          <label className="flex flex-col gap-1 text-[13px] font-medium">
+            Calendar name
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={60}
+              className="max-w-sm"
+            />
+          </label>
+          <fieldset className="flex flex-col gap-1.5 text-[13px]">
+            <legend className="mb-1 font-medium">Workspaces to include</legend>
+            {workspaces.map((ws) => (
+              <label key={ws.id} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={picked.includes(ws.id)}
+                  onChange={(e) =>
+                    setPicked((list) =>
+                      e.target.checked ? [...list, ws.id] : list.filter((id) => id !== ws.id),
+                    )
+                  }
+                  className="accent-[var(--accent)]"
+                />
+                <Dot color={ws.color} />
+                {ws.name}
+                {ws.kind === "work" ? <span className="text-[12px] text-faint">(work)</span> : null}
+              </label>
+            ))}
+          </fieldset>
+          <div className="flex items-center gap-2">
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={pending || !name.trim() || picked.length === 0}
+            >
+              Make calendar link
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <Button
+          size="sm"
+          className={cn(feeds.length && "mt-3")}
+          onClick={() => setAdding(true)}
+        >
+          <Plus size={14} /> New calendar link
+        </Button>
+      )}
+    </Section>
   );
 }
 

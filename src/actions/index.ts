@@ -114,11 +114,23 @@ export async function updateWorkspace(input: {
   workspaceId: string;
   name?: string;
   color?: string;
+  wikiUrl?: string;
 }) {
   const user = await requireUser();
   return run(async () => {
     const data = z
-      .object({ workspaceId: id, name: name.optional(), color: color.optional() })
+      .object({
+        workspaceId: id,
+        name: name.optional(),
+        color: color.optional(),
+        wikiUrl: z
+          .string()
+          .trim()
+          .max(2000)
+          .transform((v) => (v ? normalizeLink(v) : ""))
+          .refine((v) => !v || isSafeLink(v), "Wiki links must start with https:, http: or obsidian:.")
+          .optional(),
+      })
       .parse(input);
     const { workspaceId, ...patch } = data;
     await m.updateWorkspace(user.id, workspaceId, patch);
@@ -631,6 +643,27 @@ export async function revokeApiToken(input: { tokenId: string }) {
   return run(async () => {
     const data = z.object({ tokenId: id }).parse(input);
     await m.revokeApiToken(user, data.tokenId);
+  });
+}
+
+/** A private calendar link. The id is the secret, so it is made here, not by the browser. */
+export async function createCalendarFeed(input: { name: string; workspaceIds: string[] | null }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z
+      .object({ name: z.string().trim().min(1).max(60), workspaceIds: z.array(id).max(50).nullable() })
+      .parse(input);
+    const feedId = randomBytes(32).reduce((s, b) => s + "0123456789abcdefghijklmnopqrstuvwxyz"[b % 36], "");
+    await m.createCalendarFeed(user, { id: feedId, ...data });
+    return { feedId };
+  });
+}
+
+export async function deleteCalendarFeed(input: { feedId: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    const data = z.object({ feedId: z.string().regex(/^[a-z0-9]{32}$/) }).parse(input);
+    await m.deleteCalendarFeed(user, data.feedId);
   });
 }
 

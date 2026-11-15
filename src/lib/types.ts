@@ -18,6 +18,8 @@ export type WorkspaceLite = {
   name: string;
   kind: string;
   color: string;
+  /** The workspace's wiki, often an obsidian:// link. Empty when unset. */
+  wikiUrl: string;
 };
 
 export type ProjectLite = {
