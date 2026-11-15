@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   Plus,
   Search,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { createWorkspace, updateWorkspace } from "@/actions";
@@ -137,6 +138,9 @@ export function Sidebar() {
                   <MenuContent>
                     <MenuItem onSelect={() => setEditing(ws)}>Rename or recolor</MenuItem>
                     <MenuItem onSelect={() => openNewProject(ws.id)}>New project</MenuItem>
+                    <MenuItem onSelect={() => router.push(`/w/${ws.id}/automations`)}>
+                      <Zap size={14} /> Automations
+                    </MenuItem>
                   </MenuContent>
                 </Menu>
                 <button

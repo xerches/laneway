@@ -3,6 +3,8 @@ import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql } from "drizzl
 import { db } from "@/db";
 import {
   activity,
+  automationRule,
+  automationRun,
   dashboard,
   item,
   itemLink,
@@ -36,6 +38,7 @@ import type {
   StatusLite,
   WorkspaceLite,
 } from "./types";
+import type { Action, Condition, RuleLite, RunEntry, Trigger } from "./automation-types";
 import { cleanWidgets, defaultWidgets, type DashboardWidget } from "./widgets";
 
 /**
@@ -334,7 +337,13 @@ function toActivityEntry(row: {
   data: Record<string, string | null> | null;
   createdAt: Date;
 }): ActivityEntry {
-  return { ...row, createdAt: row.createdAt.toISOString() };
+  // Changes an automation made on someone's behalf show the rule's name.
+  const via = row.data?.via;
+  return {
+    ...row,
+    userName: via ? `Automation “${via}”` : row.userName,
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
 export async function getItemDetail(
@@ -599,4 +608,93 @@ export async function searchItems(userId: string, query: string): Promise<Search
     )
     .orderBy(desc(item.updatedAt))
     .limit(12);
+}
+
+// --------------------------------------------------------------- automations
+
+/**
+ * The automation page for a workspace: its rules with their last run, plus
+ * what the rule editor needs to fill its pickers.
+ */
+export async function getAutomations(userId: string, workspaceId: string) {
+  if (!(await getRole(userId, workspaceId))) return null;
+  const [rules, stats, projects, labels, members, statusNames] = await Promise.all([
+    db
+      .select()
+      .from(automationRule)
+      .where(eq(automationRule.workspaceId, workspaceId))
+      .orderBy(asc(automationRule.position), asc(automationRule.createdAt)),
+    db
+      .select({
+        ruleId: automationRun.ruleId,
+        runs: sql<number>`count(*)::int`,
+        lastAt: sql<string>`max(${automationRun.createdAt})::text`,
+        lastOutcome: sql<string>`(array_agg(${automationRun.outcome} order by ${automationRun.createdAt} desc))[1]`,
+      })
+      .from(automationRun)
+      .where(eq(automationRun.workspaceId, workspaceId))
+      .groupBy(automationRun.ruleId),
+    db
+      .select({ id: project.id, workspaceId: project.workspaceId, name: project.name, color: project.color, key: project.key })
+      .from(project)
+      .where(and(eq(project.workspaceId, workspaceId), isNull(project.archivedAt)))
+      .orderBy(asc(project.position), asc(project.createdAt)),
+    getLabels(workspaceId),
+    getMembers(workspaceId),
+    db
+      .selectDistinct({ name: status.name, category: status.category })
+      .from(status)
+      .innerJoin(project, eq(project.id, status.projectId))
+      .where(and(eq(project.workspaceId, workspaceId), isNull(project.archivedAt))),
+  ]);
+
+  const list: RuleLite[] = rules.map((r) => {
+    const st = stats.find((x) => x.ruleId === r.id);
+    return {
+      id: r.id,
+      workspaceId: r.workspaceId,
+      projectId: r.projectId,
+      name: r.name,
+      enabled: r.enabled,
+      trigger: r.trigger as Trigger,
+      conditions: r.conditions as Condition[],
+      actions: r.actions as Action[],
+      createdBy: r.createdBy,
+      createdAt: r.createdAt.toISOString(),
+      runCount: st?.runs ?? 0,
+      lastRun: st ? { outcome: st.lastOutcome, createdAt: new Date(st.lastAt).toISOString() } : null,
+    };
+  });
+
+  // One entry per status name, in the order people usually work.
+  const order = { todo: 0, active: 1, done: 2 } as Record<string, number>;
+  const seen = new Set<string>();
+  const statuses = statusNames
+    .sort((a, b) => (order[a.category] ?? 3) - (order[b.category] ?? 3) || a.name.localeCompare(b.name))
+    .filter((s) => {
+      const key = s.name.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  return { rules: list, projects, labels, members, statuses };
+}
+
+export async function getRuleRuns(ruleId: string): Promise<RunEntry[]> {
+  const rows = await db
+    .select()
+    .from(automationRun)
+    .where(eq(automationRun.ruleId, ruleId))
+    .orderBy(desc(automationRun.createdAt))
+    .limit(100);
+  return rows.map((r) => ({
+    id: r.id,
+    ruleId: r.ruleId,
+    itemId: r.itemId,
+    itemTitle: r.itemTitle,
+    outcome: r.outcome as RunEntry["outcome"],
+    message: r.message,
+    createdAt: r.createdAt.toISOString(),
+  }));
 }
